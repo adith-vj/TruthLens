@@ -2,16 +2,40 @@
 <html>
   <head>
     <style>
-      body { width: 300px; padding: 10px; font-family: sans-serif; text-align: center; }
-      button { padding: 10px; cursor: pointer; }
+      body { width: 320px; padding: 15px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #ffffff; }
+      h2 { margin-top: 0; text-align: center; color: #1a1a1a; font-size: 22px; margin-bottom: 15px; }
+      button { width: 100%; padding: 12px; background-color: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: bold; transition: 0.2s; }
+      button:hover { background-color: #1d4ed8; }
+      
+      #statusText { text-align: center; color: #6b7280; font-size: 14px; margin-top: 10px; }
+      
+      /* The Cards for our Data */
+      #results { display: none; margin-top: 15px; }
+      .card { background: #f8fafc; padding: 12px; border-radius: 8px; margin-bottom: 10px; border: 1px solid #e2e8f0; }
+      .label { font-weight: 600; color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+      .value { font-size: 15px; margin-top: 6px; font-weight: bold; color: #0f172a; }
     </style>
   </head>
   <body>
-    <h3>TruthLens</h3>
+    <h2>TruthLens</h2>
     <button id="analyzeBtn">Analyze Page</button>
-    <p id="result">Waiting for text...</p>
+    <div id="statusText"></div>
+
+    <div id="results">
+      <div class="card">
+        <div class="label">Source Reputation</div>
+        <div class="value" id="sourceVal">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Fact Check</div>
+        <div class="value" id="fakeVal">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Article Tone</div>
+        <div class="value" id="biasVal">-</div>
+      </div>
+    </div>
     
-    <!-- We will link the logic here later -->
     <script src="popup.js"></script>
   </body>
 </html>

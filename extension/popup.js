@@ -1,56 +1,69 @@
 document.getElementById('analyzeBtn').addEventListener('click', async () => {
-  const resultText = document.getElementById('result');
-  resultText.innerText = 'Analyzing page...';
+  const statusText = document.getElementById('statusText');
+  const resultsDiv = document.getElementById('results');
+  
+  statusText.innerText = 'Scanning page...';
+  resultsDiv.style.display = 'none';
 
-  // 1. Get the current active tab
+  // 1. Get the current active tab (Text AND URL)
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-  // 2. Inject a script into that tab to read the webpage text
   chrome.scripting.executeScript({
     target: { tabId: tab.id },
     function: scrapePageText,
   }, async (injectionResults) => {
     
-    // Safety check in case it couldn't read the page
     if (!injectionResults || !injectionResults[0].result) {
-        resultText.innerText = 'Could not read page text.';
+        statusText.innerText = 'Could not read page text.';
         return;
     }
 
     const scrapedText = injectionResults[0].result;
 
-    // 3. Send the scraped text to your FastAPI backend
     try {
+      statusText.innerText = 'Analyzing via TruthLens AI...';
+      
+      // 2. Send both the TEXT and the URL to the FastAPI backend
       const response = await fetch('http://127.0.0.1:8000/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: scrapedText })
+        body: JSON.stringify({ 
+          text: scrapedText, 
+          url: tab.url // Grabbed directly from the Chrome tab!
+        })
       });
       
       const data = await response.json();
       
-      // The model uses LABEL_0 for Fake and LABEL_1 for Real
-      const isFake = data.result.label === 'LABEL_0';
-      const labelText = isFake ? '🚨 High Bias / Fake News' : '✅ Looks Credible';
-      const confidence = Math.round(data.result.score * 100);
+      // 3. Populate the UI elements
+      document.getElementById('sourceVal').innerText = `${data.source} (${data.historic_bias})`;
       
-      resultText.innerText = `${labelText} \n(${confidence}% confidence)`;
+      // Fake News Logic (Remember: LABEL_1 is Real, LABEL_0 is Fake based on our earlier test)
+      const isReal = data.ai_analysis.fake_news.label === 'LABEL_1';
+      const fakeConf = Math.round(data.ai_analysis.fake_news.score * 100);
+      document.getElementById('fakeVal').innerText = isReal ? `✅ Credible (${fakeConf}%)` : `🚨 Fake/Unreliable (${fakeConf}%)`;
+
+      // Tone Logic
+      const toneLabel = data.ai_analysis.tone_bias.label; // Will be "NEUTRAL" or "BIASED"
+      const toneConf = Math.round(data.ai_analysis.tone_bias.score * 100);
+      document.getElementById('biasVal').innerText = toneLabel === 'NEUTRAL' ? `⚖️ Objective (${toneConf}%)` : `🎭 Highly Subjective (${toneConf}%)`;
+
+      // Hide the loading text and show the results dashboard
+      statusText.innerText = '';
+      resultsDiv.style.display = 'block';
       
     } catch (err) {
-      resultText.innerText = 'Error: Make sure FastAPI is running.';
+      statusText.innerText = 'Error: Make sure FastAPI is running.';
       console.error(err);
     }
   });
 });
 
-// This function runs directly inside the webpage the user is looking at
 function scrapePageText() {
-  // Grab all paragraph elements on the news site
   let paragraphs = document.getElementsByTagName('p');
   let text = '';
   for (let p of paragraphs) {
     text += p.innerText + ' ';
   }
-  // Return just the first 2000 characters to keep it under BERT's token limit
   return text.substring(0, 2000); 
 }
