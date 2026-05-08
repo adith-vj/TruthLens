@@ -67,3 +67,22 @@ function scrapePageText() {
   }
   return text.substring(0, 2000); 
 }
+// --- NEW EXPLAINER MODE LOGIC ---
+document.getElementById('explainBtn').addEventListener('click', async () => {
+  const statusText = document.getElementById('statusText');
+  statusText.innerText = 'Highlighting loaded words on page...';
+
+  // Get the active tab
+  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  // Send a message to content.js injected in that tab
+  chrome.tabs.sendMessage(tab.id, { action: "triggerExplainer" }, (response) => {
+    // Catch errors (like if the user is on a protected chrome:// page)
+    if (chrome.runtime.lastError) {
+      statusText.innerText = 'Error: Try reloading the page.';
+      console.error(chrome.runtime.lastError.message);
+    } else if (response && response.status === "scanning") {
+      statusText.innerText = '✨ Look at the webpage! Highlights applied.';
+    }
+  });
+});

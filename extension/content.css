@@ -1,0 +1,10 @@
+.truthlens-highlight {
+  border-bottom: 2px dotted #ff453a;
+  cursor: help;
+  transition: background-color 0.2s ease;
+  border-radius: 2px;
+}
+
+.truthlens-highlight:hover {
+  filter: brightness(0.9);
+}

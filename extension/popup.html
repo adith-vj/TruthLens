@@ -14,6 +14,13 @@
       .card { background: #f8fafc; padding: 12px; border-radius: 8px; margin-bottom: 10px; border: 1px solid #e2e8f0; }
       .label { font-weight: 600; color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
       .value { font-size: 15px; margin-top: 6px; font-weight: bold; color: #0f172a; }
+      .secondary-btn { 
+        background-color: #f1f5f9; 
+        color: #334155; 
+        border: 1px solid #cbd5e1; 
+        margin-top: 15px; 
+      }
+      .secondary-btn:hover { background-color: #e2e8f0; }
     </style>
   </head>
   <body>
@@ -25,6 +32,12 @@
       <div class="card">
         <div class="label">Source Reputation</div>
         <div class="value" id="sourceVal">-</div>
+        <div class="card">
+          <div class="label">Article Tone</div>
+          <div class="value" id="biasVal">-</div>
+        </div>
+    
+    <button id="explainBtn" class="secondary-btn">🔍 Explain: Highlight Loaded Language</button>
       </div>
       <div class="card">
         <div class="label">Fact Check</div>
