@@ -27,6 +27,9 @@ fake_news_model = pipeline("text-classification", model="dhruvpal/fake-news-bert
 print("Loading Tone/Bias Engine...")
 bias_model = pipeline("text-classification", model="valurank/distilroberta-bias")
 
+print("Loading Deepfake Vision Engine... (This will take a minute to download weights)")
+deepfake_model = pipeline("image-classification", model="dima806/deepfake_vs_real_image_detection")
+
 print("All engines online!")
 
 HISTORIC_BIAS_DB = {
@@ -194,4 +197,28 @@ async def analyze_image(data: ImageData):
         
     except Exception as e:
         # Catch errors if the image is protected or corrupted
+        return {"status": "error", "message": str(e)}
+@app.post("/deep-scan-image")
+async def deep_scan_image(data: ImageData):
+    try:
+        # Download the image again (or you could cache it, but this keeps it stateless and clean)
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(data.image_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        image = Image.open(BytesIO(response.content)).convert("RGB")
+        
+        # Run the heavy Vision model
+        results = deepfake_model(image)
+        
+        # The model returns a list of dicts like: [{'label': 'fake', 'score': 0.98}, {'label': 'real', 'score': 0.02}]
+        top_prediction = results[0]
+        
+        return {
+            "status": "success",
+            "prediction": top_prediction['label'].upper(), # 'FAKE' or 'REAL'
+            "confidence": round(top_prediction['score'] * 100, 2)
+        }
+        
+    except Exception as e:
         return {"status": "error", "message": str(e)}

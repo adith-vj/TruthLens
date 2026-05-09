@@ -34,8 +34,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         overlay.innerHTML = `
             <div class="truthlens-modal">
                 <button class="truthlens-close-btn" id="tl-close-btn">&times;</button>
-                <div class="truthlens-modal-header">📸 TruthLens Image Forensics</div>
+                <div class="truthlens-modal-header" style="display: flex; justify-content: space-between; align-items: center;">
+                    <span>📸 TruthLens Image Forensics</span>
+                    
+                    <button id="tl-deep-scan-btn" style="background: #2563eb; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 13px; transition: 0.2s;">
+                        🤖 Run Deep AI Scan
+                    </button>
+                </div>
                 
+                <div id="tl-deep-scan-results" style="display: none; padding: 10px; background: #0f172a; border-radius: 6px; margin-bottom: 15px; border-left: 4px solid #3b82f6; font-size: 14px;">
+                    Scanning pixels...
+                </div>
+
                 <div style="margin-bottom: 15px; font-size: 14px; color: #cbd5e1;">
                     <strong>Format:</strong> ${tier_1_metadata.format} | 
                     <strong>Size:</strong> ${tier_1_metadata.size} | 
@@ -58,12 +68,39 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 </div>
             </div>
         `;
-
         document.body.appendChild(overlay);
 
         // Wire up the close button
         document.getElementById('tl-close-btn').addEventListener('click', () => {
             overlay.remove();
+        });
+        document.getElementById('tl-deep-scan-btn').addEventListener('click', async () => {
+            const btn = document.getElementById('tl-deep-scan-btn');
+            const resultsDiv = document.getElementById('tl-deep-scan-results');
+            
+            btn.style.display = 'none'; // Hide the button
+            resultsDiv.style.display = 'block'; // Show the scanning text
+            
+            try {
+                const response = await fetch("http://127.0.0.1:8000/deep-scan-image", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ image_url: request.originalUrl })
+                });
+
+                if (!response.ok) throw new Error("Backend connection failed");
+                const data = await response.json();
+                
+                // Format the results
+                const isFake = data.prediction === 'FAKE';
+                const color = isFake ? '#ef4444' : '#22c55e'; // Red if fake, Green if real
+                
+                resultsDiv.style.borderLeftColor = color;
+                resultsDiv.innerHTML = `<strong>AI Conclusion:</strong> <span style="color: ${color};">${data.prediction}</span> (Confidence: ${data.confidence}%)`;
+
+            } catch (error) {
+                resultsDiv.innerHTML = `<span style="color: #ef4444;">Error: Could not complete deep scan.</span>`;
+            }
         });
     }
     return true; 
