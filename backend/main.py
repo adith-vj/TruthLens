@@ -3,8 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from transformers import pipeline
 from urllib.parse import urlparse
-# --- NEW IMPORT ---
 from transformers_interpret import SequenceClassificationExplainer
+import requests
+from io import BytesIO
+from PIL import Image, ExifTags
+from PIL import Image, ExifTags, ImageChops, ImageEnhance
+import base64
+from io import BytesIO
 
 app = FastAPI(title="TruthLens API")
 
@@ -42,6 +47,9 @@ class ArticleData(BaseModel):
 class ExplainData(BaseModel):
     text: str
 
+class ImageData(BaseModel):
+    image_url: str
+
 def extract_domain(url: str):
     domain = urlparse(url).netloc.lower()
     if domain.startswith("www."):
@@ -67,53 +75,123 @@ async def analyze_text(data: ArticleData):
         }
     }
 
-# --- UPDATED SMART EXPLAINER ENDPOINT ---
 @app.post("/explain")
 async def explain_bias(data: ExplainData):
-    # Truncate text (Explaining takes more compute than just classifying)
     text_to_process = data.text[:1000] 
 
-    # Initialize the explainer with your loaded bias model
     explainer = SequenceClassificationExplainer(
         bias_model.model,
         bias_model.tokenizer
     )
 
-    # Get attributions for the predicted class
     word_attributions = explainer(text_to_process)
 
     tokens_data = []
-    current_word = ""
+    current_word_chunk = ""
     current_weight = 0.0
 
-    # Stitching subwords back into full words for the Chrome Extension
     for subword, weight in word_attributions:
-        # Skip special structural tokens
         if subword in ['<s>', '</s>', '<pad>', '<cls>', '<sep>']:
             continue
-
-        # RoBERTa uses 'Ġ' to denote a space / start of a new word
-        if subword.startswith('Ġ'):
-            if current_word:
-                # Raw weights are usually small decimals (e.g. 0.15). 
-                # We multiply by 2.5 to scale them up so the frontend CSS highlights pop.
+            
+        # Decode the byte-string directly
+        decoded_chunk = bias_model.tokenizer.convert_tokens_to_string([subword])
+        
+        # If the chunk starts with a space, it's the beginning of a new word block
+        if decoded_chunk.startswith(' ') or current_word_chunk == "":
+            if current_word_chunk:
                 normalized_weight = min(abs(current_weight) * 2.5, 1.0)
-                tokens_data.append({"word": current_word, "weight": normalized_weight})
-
-            # Start a new word
-            current_word = subword.replace('Ġ', '')
+                # CRITICAL FIX: We DO NOT .strip() the word anymore. We keep the native spaces.
+                tokens_data.append({"word": current_word_chunk, "weight": normalized_weight})
+            
+            current_word_chunk = decoded_chunk
             current_weight = weight
         else:
-            # It's a continuation of the previous word (a subword chunk)
-            current_word += subword.replace('Ġ', '')
+            # It's a continuation (like a comma, an apostrophe, or the second half of a long word)
+            current_word_chunk += decoded_chunk
             current_weight += weight 
 
-    # Catch the very last word in the loop
-    if current_word:
+    # Catch the final word
+    if current_word_chunk:
         normalized_weight = min(abs(current_weight) * 2.5, 1.0)
-        tokens_data.append({"word": current_word, "weight": normalized_weight})
+        tokens_data.append({"word": current_word_chunk, "weight": normalized_weight})
 
     return {
         "status": "success",
         "tokens": tokens_data
     }
+
+@app.post("/analyze-image")
+async def analyze_image(data: ImageData):
+    try:
+        # 1. Download the image 
+        # (We use a User-Agent header so news sites don't block us thinking we're a malicious scraper)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        response = requests.get(data.image_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        # 2. Load the image into memory
+        image = Image.open(BytesIO(response.content))
+        
+        # 3. Baseline Metadata extraction
+        metadata = {
+            "format": image.format,
+            "size": f"{image.size[0]}x{image.size[1]}",
+            "exif_present": False,
+            "software_tag": "None detected",
+            "red_flag": False
+        }
+        
+        # 4. Deep dive into EXIF tags
+        exif_data = image.getexif()
+        if exif_data:
+            metadata["exif_present"] = True
+            for tag_id, value in exif_data.items():
+                tag_name = ExifTags.TAGS.get(tag_id, tag_id)
+                
+                # The "Software" tag is where Photoshop or AI generators usually leave their mark
+                if tag_name == "Software":
+                    metadata["software_tag"] = str(value)
+                    
+                    # Flag known manipulation tools
+                    suspicious_tools = ["Photoshop", "Midjourney", "DALL", "Stable Diffusion"]
+                    if any(tool.lower() in str(value).lower() for tool in suspicious_tools):
+                        metadata["red_flag"] = True
+        # --- TIER 2: ERROR LEVEL ANALYSIS (ELA) ---
+        # Convert to RGB to ensure uniform channels
+        original_img = image.convert("RGB")
+        
+        # Resave at a known quality level (90%)
+        temp_io = BytesIO()
+        original_img.save(temp_io, 'JPEG', quality=90)
+        temp_io.seek(0)
+        compressed_img = Image.open(temp_io)
+        
+        # Mathematically subtract the compressed image from the original
+        ela_image = ImageChops.difference(original_img, compressed_img)
+        
+        # The difference is usually very dark, so we enhance the brightness to see the artifacts
+        extrema = ela_image.getextrema()
+        max_diff = max([ex[1] for ex in extrema])
+        if max_diff == 0:
+            max_diff = 1
+        scale = 255.0 / max_diff
+        
+        ela_enhanced = ImageEnhance.Brightness(ela_image).enhance(scale)
+        
+        # Convert the ELA heat map to a Base64 string so the Chrome Extension can display it
+        buffered = BytesIO()
+        ela_enhanced.save(buffered, format="JPEG")
+        ela_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+        return {
+            "status": "success",
+            "tier_1_metadata": metadata,
+            "tier_2_ela": {
+                "heatmap_base64": f"data:image/jpeg;base64,{ela_base64}"
+            }
+        }
+        
+    except Exception as e:
+        # Catch errors if the image is protected or corrupted
+        return {"status": "error", "message": str(e)}
