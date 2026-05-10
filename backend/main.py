@@ -10,6 +10,7 @@ from PIL import Image, ExifTags
 from PIL import Image, ExifTags, ImageChops, ImageEnhance
 import base64
 from io import BytesIO
+import re 
 
 app = FastAPI(title="TruthLens API")
 
@@ -78,50 +79,33 @@ async def analyze_text(data: ArticleData):
         }
     }
 
+
 @app.post("/explain")
 async def explain_bias(data: ExplainData):
-    text_to_process = data.text[:1000] 
+    text_to_process = data.text[:2000] 
+    
+    # Slice the paragraph into sentences based on punctuation (. ! ?) followed by a space
+    sentences = re.split(r'(?<=[.!?]) +', text_to_process)
+    
+    flagged_sentences = []
 
-    explainer = SequenceClassificationExplainer(
-        bias_model.model,
-        bias_model.tokenizer
-    )
-
-    word_attributions = explainer(text_to_process)
-
-    tokens_data = []
-    current_word_chunk = ""
-    current_weight = 0.0
-
-    for subword, weight in word_attributions:
-        if subword in ['<s>', '</s>', '<pad>', '<cls>', '<sep>']:
+    for sentence in sentences:
+        # Skip tiny fragments or empty strings
+        if len(sentence) < 15:
             continue
             
-        # Decode the byte-string directly
-        decoded_chunk = bias_model.tokenizer.convert_tokens_to_string([subword])
+        # Run the standard, blazing-fast pipeline on the single sentence
+        result = bias_model(sentence)[0]
+        print(f"TruthLens scanned: '{sentence[:30]}...' -> {result}")
         
-        # If the chunk starts with a space, it's the beginning of a new word block
-        if decoded_chunk.startswith(' ') or current_word_chunk == "":
-            if current_word_chunk:
-                normalized_weight = min(abs(current_weight) * 2.5, 1.0)
-                # CRITICAL FIX: We DO NOT .strip() the word anymore. We keep the native spaces.
-                tokens_data.append({"word": current_word_chunk, "weight": normalized_weight})
-            
-            current_word_chunk = decoded_chunk
-            current_weight = weight
-        else:
-            # It's a continuation (like a comma, an apostrophe, or the second half of a long word)
-            current_word_chunk += decoded_chunk
-            current_weight += weight 
-
-    # Catch the final word
-    if current_word_chunk:
-        normalized_weight = min(abs(current_weight) * 2.5, 1.0)
-        tokens_data.append({"word": current_word_chunk, "weight": normalized_weight})
+        # distilroberta-bias outputs labels like 'BIASED' or 'NEUTRAL'
+        # We only flag it if the AI is highly confident (e.g., > 75%)
+        if result['label'].upper() == 'BIASED' and result['score'] > 0.75:
+            flagged_sentences.append(sentence)
 
     return {
         "status": "success",
-        "tokens": tokens_data
+        "flagged_sentences": flagged_sentences
     }
 
 @app.post("/analyze-image")

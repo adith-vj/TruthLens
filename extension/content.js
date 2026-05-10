@@ -119,22 +119,28 @@ async function analyzeAndHighlight(targetElement) {
         if (!response.ok) throw new Error("Backend connection failed");
         
         const data = await response.json();
-        let highlightedHtml = "";
+        const flaggedSentences = data.flagged_sentences; 
         
-        data.tokens.forEach(token => {
-            if (token.weight > 0.5) { 
-                const alpha = token.weight * 0.5; 
-                const tooltipText = `TruthLens Flag: Loaded language (Confidence: ${Math.round(token.weight * 100)}%)`;
-                
-                // CRITICAL FIX: Removed the extra space at the end of the string
-                highlightedHtml += `<span class="truthlens-highlight" style="background-color: rgba(255, 69, 58, ${alpha});" title="${tooltipText}">${token.word}</span>`;
-            } else {
-                // CRITICAL FIX: Removed the extra space here too
-                highlightedHtml += token.word; 
-            }
+        let highlightedHtml = originalText;
+        
+        flaggedSentences.forEach(sentence => {
+            // 1. Escape the special characters
+            let escapedSentence = sentence.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            
+            // 2. THE FIX: Replace hard spaces with a flexible regex space matcher (\s+)
+            // This tells JS: "Match this sentence even if the browser added weird hidden line-breaks or extra spaces"
+            escapedSentence = escapedSentence.replace(/\s+/g, '\\s+');
+            
+            const regex = new RegExp(escapedSentence, 'g'); 
+            
+            highlightedHtml = highlightedHtml.replace(regex, (match) => {
+                return `<span class="truthlens-highlight" 
+                    style="background-color: rgba(255, 69, 58, 0.15); border-bottom: 2px dotted rgba(255, 69, 58, 0.6); cursor: help; border-radius: 3px;" 
+                    title="TruthLens Flag: High concentration of emotionally loaded or subjective language.">
+                    ${match}
+                </span>`;
+            });
         });
-
-        // CRITICAL FIX: Removed .trim() so we don't accidentally cut off leading/trailing formatting
         targetElement.innerHTML = highlightedHtml;
 
     } catch (error) {
