@@ -66,3 +66,45 @@
   background: #334155; padding: 4px 10px;
   border-radius: 4px; font-size: 12px; font-weight: bold;
 }
+
+/* --- TRUTHLENS LOADING TOAST --- */
+#truthlens-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: #0f172a;
+    color: #f8fafc;
+    padding: 14px 20px;
+    border-radius: 8px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    z-index: 999999;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: none;
+    border-left: 4px solid #3b82f6;
+}
+
+#truthlens-toast.tl-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.truthlens-spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid #334155;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: tl-spin 0.8s linear infinite;
+}
+
+@keyframes tl-spin {
+    to { transform: rotate(360deg); }
+}

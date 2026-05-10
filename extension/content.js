@@ -1,26 +1,64 @@
+
+function showTruthLensToast(message) {
+    let toast = document.getElementById('truthlens-toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'truthlens-toast';
+        document.body.appendChild(toast);
+    }
+    toast.innerHTML = `<div class="truthlens-spinner"></div> <span>${message}</span>`;
+    // Tiny delay ensures the CSS transition triggers
+    setTimeout(() => toast.classList.add('tl-visible'), 10); 
+}
+
+function hideTruthLensToast() {
+    const toast = document.getElementById('truthlens-toast');
+    if (toast) {
+        toast.classList.remove('tl-visible');
+    }
+}
+
 // Listens for a message from your popup.js to trigger the scan
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    
+    // --- TEXT EXPLAINER LOGIC ---
     if (request.action === "triggerExplainer") {
         console.log("TruthLens: Explainer Mode Activated");
         
-        // Let's grab the main paragraphs of the article to scan
-        // This targets standard article text without grabbing menus/footers
+        showTruthLensToast("Analyzing article for loaded language...");
+        document.body.style.cursor = "progress"; // Change mouse to loading state
+        
         const paragraphs = document.querySelectorAll('p'); 
+        const scanPromises = []; // Track all our backend requests
         
         paragraphs.forEach(p => {
-            // Only process paragraphs with actual substance
             if (p.innerText.length > 50) {
-                analyzeAndHighlight(p);
+                // Push the promise into our tracking array
+                scanPromises.push(analyzeAndHighlight(p)); 
             }
+        });
+        
+        // When every single paragraph is done scanning, hide the loader
+        Promise.all(scanPromises).then(() => {
+            hideTruthLensToast();
+            document.body.style.cursor = "default"; // Reset mouse
         });
         
         sendResponse({status: "scanning"});
     }
 
+    // --- NEW: INTERMEDIATE LOADING STATE FOR IMAGES ---
+    else if (request.action === "showLoader") {
+        showTruthLensToast(request.message);
+    }
+
+    // --- IMAGE MODAL UI INJECTION ---
     else if (request.action === "showImageAnalysis") {
         console.log("TruthLens: Injecting Image Forensics UI");
         
-        // Remove existing modal if one is already open
+        // The backend finished! Hide the toast loader immediately.
+        hideTruthLensToast();
+        
         const existingModal = document.getElementById('truthlens-image-modal');
         if (existingModal) existingModal.remove();
 
