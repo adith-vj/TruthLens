@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     # --- Input validation ---
     MAX_CLAIM_LENGTH: int = 2000
 
+    # --- Google Fact Check client ---
+    # Timeout (seconds) for each HTTP request to the Google Fact Check API.
+    # Set low enough to avoid blocking FastAPI workers on slow upstream responses.
+    FACTCHECK_TIMEOUT_SECONDS: float = 5.0
+    # Maximum number of claims to request per API call (pageSize parameter).
+    # The first matching claim is used; more than 5 is rarely beneficial.
+    FACTCHECK_MAX_RESULTS: int = 5
+
     # --- Logging ---
     LOG_LEVEL: str = "INFO"
 

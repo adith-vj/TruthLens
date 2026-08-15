@@ -38,6 +38,14 @@ def isolate_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config_module.settings, "LOG_LEVEL", "WARNING")
     monkeypatch.setattr(config_module.settings, "MAX_CLAIM_LENGTH", 2000)
     monkeypatch.setattr(config_module.settings, "ALLOWED_ORIGINS", ["*"])
+    monkeypatch.setattr(config_module.settings, "FACTCHECK_TIMEOUT_SECONDS", 5.0)
+    monkeypatch.setattr(config_module.settings, "FACTCHECK_MAX_RESULTS", 5)
+    # NOTE: GOOGLE_FACTCHECK_API_KEY is intentionally NOT set here.
+    # It defaults to SecretStr("") from Settings, which causes
+    # FactCheckConfigError → route falls through to placeholder.
+    # This keeps all Phase 1 test assertions valid without any mocking.
+    # Tests that exercise real factcheck behavior must set the key explicitly
+    # via monkeypatch and provide a respx_mock for the HTTP call.
 
 
 @pytest_asyncio.fixture

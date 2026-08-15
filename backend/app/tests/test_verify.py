@@ -207,3 +207,220 @@ async def test_health_response_has_env(async_client: AsyncClient) -> None:
     response = await async_client.get(HEALTH_URL)
     data = response.json()
     assert "env" in data, "Health response must include 'env' field"
+
+
+# =============================================================================
+# Phase 2 — Route-level integration tests (Google Fact Check wired in)
+# =============================================================================
+#
+# Isolation strategy:
+#   - The `isolate_settings` autouse fixture leaves GOOGLE_FACTCHECK_API_KEY
+#     as SecretStr("") by default.  Phase 1 tests pass because FactCheckConfigError
+#     causes a fallthrough to the placeholder (200, unverifiable).
+#   - Phase 2 tests that exercise the factcheck path must:
+#       1. Set a non-empty fake key via monkeypatch.
+#       2. Provide a respx_mock for the Google API call.
+#   - Tests that specifically test the no-key fallthrough only need step 1
+#     (explicitly setting an empty key to document the behavior).
+#
+# respx_mock intercepts ALL httpx requests for the test's duration, preventing
+# any accidental real network calls to the Google Fact Check API.
+
+import pytest as _pytest  # noqa: E402 — local import to avoid polluting Phase 1 namespace
+
+from pydantic import SecretStr  # noqa: E402
+
+from app.core import config as config_module  # noqa: E402
+from app.services.factcheck import FACTCHECK_API_URL  # noqa: E402
+
+_PHASE2_CLAIM = "The Earth is flat."
+
+# A minimal valid Google API response used across multiple Phase 2 tests.
+_GOOGLE_FALSE_RESPONSE = {
+    "claims": [
+        {
+            "text": "The Earth is flat.",
+            "claimReview": [
+                {
+                    "publisher": {
+                        "name": "SciCheck",
+                        "site": "factcheck.org",
+                    },
+                    "url": "https://www.factcheck.org/earth-is-not-flat",
+                    "title": "Earth Is Not Flat",
+                    "textualRating": "False",
+                }
+            ],
+        }
+    ]
+}
+
+
+async def test_route_returns_real_verdict_when_factcheck_found(
+    async_client: AsyncClient,
+    respx_mock,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """
+    When Google returns a valid fact-check, the route returns the normalized verdict
+    (not the placeholder).  The response still conforms to VerifyResponse schema.
+    """
+    monkeypatch.setattr(
+        config_module.settings, "GOOGLE_FACTCHECK_API_KEY", SecretStr("test-key")
+    )
+    respx_mock.get(FACTCHECK_API_URL).respond(json=_GOOGLE_FALSE_RESPONSE)
+
+    response = await async_client.post(VERIFY_URL, json={"text": _PHASE2_CLAIM})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["verdict"] == "false"
+    assert data["confidence_score"] == _pytest.approx(0.85)
+    assert len(data["sources"]) == 1
+    assert data["sources"][0]["publisher"] == "SciCheck"
+    assert "factcheck.org" in data["sources"][0]["url"]
+
+
+async def test_route_response_is_valid_verify_response_schema(
+    async_client: AsyncClient,
+    respx_mock,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """
+    The normalized result passes through VerifyResponse Pydantic model validation
+    before being returned.  Required fields are present and types are correct.
+    """
+    monkeypatch.setattr(
+        config_module.settings, "GOOGLE_FACTCHECK_API_KEY", SecretStr("test-key")
+    )
+    respx_mock.get(FACTCHECK_API_URL).respond(json=_GOOGLE_FALSE_RESPONSE)
+
+    response = await async_client.post(VERIFY_URL, json={"text": _PHASE2_CLAIM})
+
+    assert response.status_code == 200
+    data = response.json()
+    # Verify all three required schema fields are present
+    assert "verdict" in data
+    assert "confidence_score" in data
+    assert "sources" in data
+    # Verify types
+    assert data["verdict"] in ("true", "false", "misleading", "unverifiable")
+    assert isinstance(data["confidence_score"], float)
+    assert isinstance(data["sources"], list)
+
+
+async def test_route_falls_through_to_placeholder_when_no_match(
+    async_client: AsyncClient,
+    respx_mock,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """
+    When Google returns {} (no fact-check found), the route falls through to the
+    Phase 1 placeholder: verdict='unverifiable', confidence=0.0, sources=[].
+    """
+    monkeypatch.setattr(
+        config_module.settings, "GOOGLE_FACTCHECK_API_KEY", SecretStr("test-key")
+    )
+    respx_mock.get(FACTCHECK_API_URL).respond(json={})
+
+    response = await async_client.post(VERIFY_URL, json={"text": _PHASE2_CLAIM})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["verdict"] == "unverifiable"
+    assert data["confidence_score"] == _pytest.approx(0.0)
+    assert data["sources"] == []
+
+
+async def test_route_falls_through_when_no_api_key(
+    async_client: AsyncClient,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """
+    When GOOGLE_FACTCHECK_API_KEY is empty, FactCheckConfigError is raised
+    before any HTTP call.  The route falls through to the placeholder (200).
+    No respx_mock needed: no HTTP request is made.
+    """
+    monkeypatch.setattr(
+        config_module.settings, "GOOGLE_FACTCHECK_API_KEY", SecretStr("")
+    )
+
+    response = await async_client.post(VERIFY_URL, json={"text": _PHASE2_CLAIM})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["verdict"] == "unverifiable"
+    assert data["sources"] == []
+
+
+async def test_route_502_on_google_auth_failure_401(
+    async_client: AsyncClient,
+    respx_mock,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """HTTP 401 from Google → route returns 502 Bad Gateway."""
+    monkeypatch.setattr(
+        config_module.settings, "GOOGLE_FACTCHECK_API_KEY", SecretStr("bad-key")
+    )
+    respx_mock.get(FACTCHECK_API_URL).respond(status_code=401)
+
+    response = await async_client.post(VERIFY_URL, json={"text": _PHASE2_CLAIM})
+
+    assert response.status_code == 502
+    # Error detail must be a static safe string, not a raw upstream message
+    assert response.json()["detail"] == "upstream service error"
+
+
+async def test_route_503_on_google_quota_exceeded(
+    async_client: AsyncClient,
+    respx_mock,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """HTTP 429 from Google → route returns 503 Service Unavailable."""
+    monkeypatch.setattr(
+        config_module.settings, "GOOGLE_FACTCHECK_API_KEY", SecretStr("test-key")
+    )
+    respx_mock.get(FACTCHECK_API_URL).respond(status_code=429)
+
+    response = await async_client.post(VERIFY_URL, json={"text": _PHASE2_CLAIM})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "upstream service temporarily unavailable"
+
+
+async def test_route_503_on_google_server_error(
+    async_client: AsyncClient,
+    respx_mock,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """HTTP 503 from Google → route returns 503 Service Unavailable."""
+    monkeypatch.setattr(
+        config_module.settings, "GOOGLE_FACTCHECK_API_KEY", SecretStr("test-key")
+    )
+    respx_mock.get(FACTCHECK_API_URL).respond(status_code=503)
+
+    response = await async_client.post(VERIFY_URL, json={"text": _PHASE2_CLAIM})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "upstream service temporarily unavailable"
+
+
+async def test_route_503_on_google_timeout(
+    async_client: AsyncClient,
+    respx_mock,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """Google API timeout → route returns 503 Service Unavailable."""
+    import httpx
+
+    monkeypatch.setattr(
+        config_module.settings, "GOOGLE_FACTCHECK_API_KEY", SecretStr("test-key")
+    )
+    respx_mock.get(FACTCHECK_API_URL).mock(
+        side_effect=httpx.ConnectTimeout("timed out")
+    )
+
+    response = await async_client.post(VERIFY_URL, json={"text": _PHASE2_CLAIM})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "upstream service temporarily unavailable"
