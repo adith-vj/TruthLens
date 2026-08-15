@@ -1,16 +1,36 @@
 # Python cache
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# Virtual environments (if you use them later)
+# Virtual environments
 venv/
 env/
-.env
+.venv/
 
-# Hugging Face cache (just in case)
+# Environment variable files — NEVER commit secrets
+.env
+*.env
+!.env.example
+
+# Pytest cache
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Hugging Face / ML caches
 .huggingface/
 .cache/
 
 # OS generated files
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# IDEs
+.vscode/
+.idea/
+*.suo
+*.user

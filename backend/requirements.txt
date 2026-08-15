@@ -1,0 +1,25 @@
+# TruthLens Verification Backend — Dependencies
+# Python >= 3.11 required
+#
+# NOTE: Heavy ML dependencies (transformers, mediapipe, Pillow, opencv-python,
+# numpy) used by the legacy backend/main.py are intentionally excluded here.
+# They will be consolidated in a future integration task.
+
+# --- Web framework ---
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+
+# --- Data validation ---
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+
+# --- Async HTTP client (used by future service integrations) ---
+httpx>=0.27.0
+
+# --- Environment variable loading ---
+python-dotenv>=1.0.0
+
+# --- Testing ---
+pytest>=8.2.0
+pytest-asyncio>=0.23.0
+anyio[trio]>=4.4.0
