@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     # The first matching claim is used; more than 5 is rarely beneficial.
     FACTCHECK_MAX_RESULTS: int = 5
 
+    # --- Gemini classifier client ---
+    # Timeout (seconds) for each HTTP request to the Gemini API.
+    # Kept low: classification is a cheap call and should not block the pipeline.
+    CLASSIFIER_TIMEOUT_SECONDS: float = 5.0
+
     # --- Logging ---
     LOG_LEVEL: str = "INFO"
 

@@ -1,41 +1,56 @@
 """
 api/verify.py — Route handler for POST /api/verify.
 
-Phase 2 behavior
+Phase 3 behavior
 -----------------
+A hybrid claim classifier runs BEFORE the Google Fact Check lookup.
+OPINION and ADVERTISEMENT claims are short-circuited immediately and
+return the unverifiable placeholder without calling any external API.
+FACTUAL_CLAIM and AMBIGUOUS both proceed to the Google Fact Check layer.
+AMBIGUOUS claims have their final confidence score reduced by × 0.7.
+
+Phase 2 behavior (preserved)
+------------------------------
 Input is validated, then the Google Fact Check API is queried via the
 factcheck service.  The normalized result is returned as a VerifyResponse
 if a relevant fact-check is found.  If not (or if the API key is absent),
-the route falls through to the Phase 1 placeholder response.
+the route falls through to the placeholder response.
 
-All normalized results are explicitly constructed through VerifyResponse
-(the public Pydantic model) before being returned, ensuring final schema
-validation on the way out regardless of what the service layer produced.
-
-Error mapping
--------------
+Error mapping (factcheck layer — unchanged from Phase 2)
+---------------------------------------------------------
     FactCheckConfigError      → log error, fall through to placeholder (200)
     FactCheckAuthError        → 502 Bad Gateway
     FactCheckQuotaError       → 503 Service Unavailable
     FactCheckTimeoutError     → 503 Service Unavailable
     FactCheckServiceError     → 503 Service Unavailable
 
-Client-facing error detail strings are static and safe — no raw upstream
-error text, no API keys, and no internal stack detail is ever forwarded.
+Classifier error handling (Phase 3)
+-------------------------------------
+    classify_claim() NEVER raises — all exceptions are caught internally.
+    Classifier failure → treated as FACTUAL_CLAIM → pipeline continues.
 
-Request flow (Phase 2)
------------------------
+ClaimType is NOT exposed in VerifyResponse.  The public API schema is unchanged.
+
+Full request flow (Phase 3)
+----------------------------
     POST /api/verify
       │
-      ├─ Pydantic validates VerifyRequest    → 422 on failure
-      ├─ Route-level length check            → 422 on failure
+      ├─ Pydantic validates VerifyRequest              → 422 on failure
+      ├─ Route-level length check                      → 422 on failure
       │
-      ├─ verify_claim_factcheck(claim_text)
+      ├─ classify_claim(claim_text)                    [Phase 3]
+      │     ├─ OPINION / ADVERTISEMENT → return placeholder (200, no factcheck)
+      │     ├─ FACTUAL_CLAIM           → proceed
+      │     └─ AMBIGUOUS               → proceed (confidence × 0.7 applied later)
+      │     (classifier never raises; failure → FACTUAL_CLAIM)
+      │
+      ├─ verify_claim_factcheck(claim_text)            [Phase 2]
       │     ├─ FactCheckConfigError  → log + fall through to placeholder
       │     ├─ FactCheckAuthError    → 502
       │     ├─ FactCheckQuotaError   → 503
       │     ├─ Timeout / Service err → 503
-      │     ├─ match found           → return VerifyResponse (through Pydantic)
+      │     ├─ match found           → build VerifyResponse
+      │     │     └─ AMBIGUOUS: confidence × 0.7 applied here
       │     └─ None returned         → fall through to placeholder
       │
       └─ Placeholder: VerifyResponse(verdict="unverifiable", confidence_score=0.0, sources=[])
@@ -49,6 +64,7 @@ from fastapi import status as http_status
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.verification import VerifyRequest, VerifyResponse
+from app.services.classifier import ClaimType, classify_claim
 from app.services.factcheck import (
     FactCheckAuthError,
     FactCheckConfigError,
@@ -62,6 +78,11 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
+# Confidence multiplier applied to AMBIGUOUS claims when a fact-check result
+# is found.  Applied here (in the route layer) rather than in the factcheck
+# service to keep classification concerns out of the normalization layer.
+_AMBIGUOUS_CONFIDENCE_FACTOR = 0.7
+
 
 @router.post(
     "/verify",
@@ -70,8 +91,8 @@ router = APIRouter()
     description=(
         "Accepts a text claim selected by the user and returns a structured "
         "verdict with a confidence score and supporting sources. "
-        "Queries the Google Fact Check Tools API for existing fact-checks "
-        "and normalizes the result into the standard VerifyResponse schema. "
+        "A hybrid classifier pre-filters opinions and advertisements before "
+        "querying the Google Fact Check Tools API. "
         "Returns a placeholder response when no fact-check is available."
     ),
     responses={
@@ -86,9 +107,10 @@ async def verify_claim(request: VerifyRequest) -> VerifyResponse:
     """
     Verify a factual claim submitted by the Chrome Extension.
 
-    Validates the input, queries the Google Fact Check API, and returns a
-    VerifyResponse.  All fact-check results are passed through the VerifyResponse
-    Pydantic model before being returned to guarantee schema correctness.
+    Validates the input, classifies the claim type, then queries the Google
+    Fact Check API for matching fact-checks.  All results are passed through
+    the VerifyResponse Pydantic model before being returned to guarantee
+    schema correctness.
 
     Args:
         request: Parsed and validated VerifyRequest body.
@@ -119,6 +141,26 @@ async def verify_claim(request: VerifyRequest) -> VerifyResponse:
                 f"{settings.MAX_CLAIM_LENGTH} characters"
             ),
         )
+
+    # --- Phase 3: Classify claim type ---
+    # classify_claim() never raises; all failures fall back to FACTUAL_CLAIM.
+    claim_type = await classify_claim(claim_text)
+    logger.info("Claim type: %s (length=%d)", claim_type.value, len(claim_text))
+
+    # OPINION and ADVERTISEMENT: early exit — no fact-check call.
+    if claim_type in (ClaimType.OPINION, ClaimType.ADVERTISEMENT):
+        logger.info(
+            "Early exit: claim classified as %s — skipping fact-check",
+            claim_type.value,
+        )
+        return VerifyResponse(
+            verdict="unverifiable",
+            confidence_score=0.0,
+            sources=[],
+        )
+
+    # FACTUAL_CLAIM and AMBIGUOUS both proceed to the fact-check layer.
+    # For AMBIGUOUS, the confidence score will be reduced after the lookup.
 
     # --- Phase 2: Google Fact Check lookup ---
     match = None
@@ -157,23 +199,33 @@ async def verify_claim(request: VerifyRequest) -> VerifyResponse:
         )
 
     # --- Fact-check found: build VerifyResponse through the Pydantic model ---
-    # Explicitly constructing VerifyResponse (not passing FactCheckMatch directly)
-    # ensures the public schema is validated on every response path.
     if match is not None:
+        # Apply AMBIGUOUS confidence reduction in this layer, not in the
+        # factcheck service, to keep normalization logic uncontaminated.
+        confidence = match.confidence_score
+        if claim_type == ClaimType.AMBIGUOUS:
+            adjusted = max(0.0, min(1.0, confidence * _AMBIGUOUS_CONFIDENCE_FACTOR))
+            logger.info(
+                "AMBIGUOUS claim: confidence adjusted from %.2f to %.2f (× %.1f)",
+                confidence,
+                adjusted,
+                _AMBIGUOUS_CONFIDENCE_FACTOR,
+            )
+            confidence = adjusted
+
         logger.info(
             "Fact-check result: verdict=%s confidence=%.2f sources=%d",
             match.verdict,
-            match.confidence_score,
+            confidence,
             len(match.sources),
         )
         return VerifyResponse(
             verdict=match.verdict,
-            confidence_score=match.confidence_score,
-            sources=match.sources,  # list[SourceItem] — already validated by factcheck service
+            confidence_score=confidence,
+            sources=match.sources,
         )
 
-    # --- No match / not configured: placeholder (Phase 1 behavior) ---
-    # TODO (Phase 3): add claim classification layer before this fallback.
+    # --- No match / not configured: placeholder ---
     # TODO (Phase 4): add LLM/search fallback before this placeholder.
     logger.info(
         "No fact-check found for claim (length=%d) — returning placeholder",

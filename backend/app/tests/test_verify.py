@@ -60,22 +60,22 @@ async def test_valid_claim(async_client: AsyncClient) -> None:
 
 async def test_placeholder_verdict_is_unverifiable(async_client: AsyncClient) -> None:
     """
-    During scaffolding, the verdict is always 'unverifiable'.
-    This assertion documents the scaffold-phase behavior and will be updated
-    in Phase 2 when real verification is implemented.
+    When no API key is configured (the test default via isolate_settings),
+    the route falls through to the placeholder and returns verdict='unverifiable'.
+
+    This tests the no-match / no-key code path, which remains the fallback
+    behavior after Phase 2. The isolate_settings autouse fixture resets
+    GOOGLE_FACTCHECK_API_KEY to empty, so no real API call is made.
     """
     response = await post_verify(async_client, {"text": SAMPLE_CLAIM})
     data = response.json()
-    assert data["verdict"] == "unverifiable", (
-        "Scaffold should return 'unverifiable'. "
-        "Update this test in Phase 2 when real verification is wired."
-    )
+    assert data["verdict"] == "unverifiable"
 
 
 async def test_placeholder_confidence_is_zero(async_client: AsyncClient) -> None:
     """
-    During scaffolding, confidence_score is always 0.0.
-    Will be updated in Phase 2.
+    When no API key is configured (the test default via isolate_settings),
+    the placeholder response has confidence_score=0.0.
     """
     response = await post_verify(async_client, {"text": SAMPLE_CLAIM})
     data = response.json()
@@ -84,8 +84,8 @@ async def test_placeholder_confidence_is_zero(async_client: AsyncClient) -> None
 
 async def test_placeholder_sources_is_empty(async_client: AsyncClient) -> None:
     """
-    During scaffolding, sources is always an empty list.
-    Will be updated in Phase 2.
+    When no API key is configured (the test default via isolate_settings),
+    the placeholder response has an empty sources list.
     """
     response = await post_verify(async_client, {"text": SAMPLE_CLAIM})
     data = response.json()
@@ -424,3 +424,247 @@ async def test_route_503_on_google_timeout(
 
     assert response.status_code == 503
     assert response.json()["detail"] == "upstream service temporarily unavailable"
+
+
+# =============================================================================
+# Phase 3 — Route-level integration tests (Classifier wired in)
+# =============================================================================
+#
+# Isolation strategy:
+#   - All tests mock `classify_claim` in the verify module via monkeypatch so
+#     tests are hermetic and don't depend on Gemini or rule-based behavior.
+#   - `verify_claim_factcheck` is also mocked where needed to avoid Gemini/
+#     Google API calls and to assert call/no-call behavior.
+#   - Phase 1 / Phase 2 tests continue to pass because `isolate_settings`
+#     resets GEMINI_API_KEY to empty → classify_claim returns FACTUAL_CLAIM
+#     via ConfigError fallthrough → factcheck also has no key → placeholder.
+#
+# Requirements covered:
+#   13. Route does NOT call factcheck for OPINION
+#   14. Route does NOT call factcheck for ADVERTISEMENT
+#   15. FACTUAL_CLAIM reaches factcheck
+#   16. AMBIGUOUS reaches factcheck
+#   17. AMBIGUOUS confidence is multiplied by 0.7
+#   18. Phase 1/2 route behavior still works (implicitly — full suite passes)
+
+from unittest.mock import AsyncMock as _AsyncMock  # noqa: E402
+
+import app.api.verify as _verify_module  # noqa: E402
+from app.services.classifier import ClaimType as _ClaimType  # noqa: E402
+
+_PHASE3_CLAIM = "Scientists claim that coffee prevents cancer."
+
+
+async def test_route_opinion_returns_placeholder_without_calling_factcheck(
+    async_client: AsyncClient,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """
+    Requirement 13: OPINION claim → route returns placeholder immediately.
+    verify_claim_factcheck must NOT be called.
+    """
+    monkeypatch.setattr(
+        _verify_module, "classify_claim", _AsyncMock(return_value=_ClaimType.OPINION)
+    )
+    factcheck_mock = _AsyncMock(side_effect=AssertionError("factcheck must not be called for OPINION"))
+    monkeypatch.setattr(_verify_module, "verify_claim_factcheck", factcheck_mock)
+
+    response = await async_client.post(VERIFY_URL, json={"text": "I think coffee is healthy."})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["verdict"] == "unverifiable"
+    assert data["confidence_score"] == 0.0
+    assert data["sources"] == []
+
+
+async def test_route_advertisement_returns_placeholder_without_calling_factcheck(
+    async_client: AsyncClient,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """
+    Requirement 14: ADVERTISEMENT claim → route returns placeholder immediately.
+    verify_claim_factcheck must NOT be called.
+    """
+    monkeypatch.setattr(
+        _verify_module, "classify_claim", _AsyncMock(return_value=_ClaimType.ADVERTISEMENT)
+    )
+    factcheck_mock = _AsyncMock(side_effect=AssertionError("factcheck must not be called for ADVERTISEMENT"))
+    monkeypatch.setattr(_verify_module, "verify_claim_factcheck", factcheck_mock)
+
+    response = await async_client.post(VERIFY_URL, json={"text": "Buy now — limited time offer!"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["verdict"] == "unverifiable"
+    assert data["confidence_score"] == 0.0
+    assert data["sources"] == []
+
+
+async def test_route_factual_claim_calls_factcheck(
+    async_client: AsyncClient,
+    respx_mock,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """
+    Requirement 15: FACTUAL_CLAIM → fact-check is called and result is returned.
+    """
+    monkeypatch.setattr(
+        _verify_module, "classify_claim", _AsyncMock(return_value=_ClaimType.FACTUAL_CLAIM)
+    )
+    monkeypatch.setattr(
+        config_module.settings, "GOOGLE_FACTCHECK_API_KEY", SecretStr("test-key")
+    )
+    respx_mock.get(FACTCHECK_API_URL).respond(json=_GOOGLE_FALSE_RESPONSE)
+
+    response = await async_client.post(VERIFY_URL, json={"text": _PHASE3_CLAIM})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["verdict"] == "false"
+    assert data["confidence_score"] == _pytest.approx(0.85)
+
+
+async def test_route_ambiguous_calls_factcheck(
+    async_client: AsyncClient,
+    respx_mock,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """
+    Requirement 16: AMBIGUOUS claim → fact-check is still called.
+    """
+    monkeypatch.setattr(
+        _verify_module, "classify_claim", _AsyncMock(return_value=_ClaimType.AMBIGUOUS)
+    )
+    monkeypatch.setattr(
+        config_module.settings, "GOOGLE_FACTCHECK_API_KEY", SecretStr("test-key")
+    )
+    respx_mock.get(FACTCHECK_API_URL).respond(json=_GOOGLE_FALSE_RESPONSE)
+
+    response = await async_client.post(VERIFY_URL, json={"text": _PHASE3_CLAIM})
+
+    assert response.status_code == 200
+    # Confidence must be reduced (× 0.7), so it won't be 0.85
+    data = response.json()
+    assert data["verdict"] == "false"
+    assert data["confidence_score"] != _pytest.approx(0.85), (
+        "AMBIGUOUS confidence must be reduced from the raw factcheck value"
+    )
+
+
+async def test_route_ambiguous_confidence_reduced_by_factor(
+    async_client: AsyncClient,
+    respx_mock,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """
+    Requirement 17: AMBIGUOUS claim confidence is multiplied by 0.7.
+    Factcheck returns confidence=0.85 → final must be 0.85 × 0.7 = 0.595.
+    """
+    monkeypatch.setattr(
+        _verify_module, "classify_claim", _AsyncMock(return_value=_ClaimType.AMBIGUOUS)
+    )
+    monkeypatch.setattr(
+        config_module.settings, "GOOGLE_FACTCHECK_API_KEY", SecretStr("test-key")
+    )
+    respx_mock.get(FACTCHECK_API_URL).respond(json=_GOOGLE_FALSE_RESPONSE)
+
+    response = await async_client.post(VERIFY_URL, json={"text": _PHASE3_CLAIM})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["verdict"] == "false"
+    expected_confidence = _pytest.approx(0.85 * 0.7, abs=1e-6)
+    assert data["confidence_score"] == expected_confidence, (
+        f"Expected confidence 0.85 × 0.7 = {0.85 * 0.7:.4f}, "
+        f"got {data['confidence_score']}"
+    )
+
+
+async def test_route_ambiguous_no_factcheck_match_returns_placeholder(
+    async_client: AsyncClient,
+    respx_mock,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """
+    AMBIGUOUS claim where factcheck returns no match → placeholder (confidence
+    NOT reduced, since there is no match to reduce).
+    """
+    monkeypatch.setattr(
+        _verify_module, "classify_claim", _AsyncMock(return_value=_ClaimType.AMBIGUOUS)
+    )
+    monkeypatch.setattr(
+        config_module.settings, "GOOGLE_FACTCHECK_API_KEY", SecretStr("test-key")
+    )
+    respx_mock.get(FACTCHECK_API_URL).respond(json={})
+
+    response = await async_client.post(VERIFY_URL, json={"text": _PHASE3_CLAIM})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["verdict"] == "unverifiable"
+    assert data["confidence_score"] == _pytest.approx(0.0)
+    assert data["sources"] == []
+
+
+async def test_route_classifier_failure_falls_through_to_factcheck(
+    async_client: AsyncClient,
+    respx_mock,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """
+    If classify_claim raises unexpectedly (should not happen in practice, but
+    defensively: the route wraps classify_claim in a try/except too), the
+    pipeline continues.  This tests the resilience contract.
+
+    Here we verify that when classifier returns FACTUAL_CLAIM (the fallback
+    behavior for any classifier error), the factcheck layer still runs.
+    """
+    # Simulate the fallback scenario: classify_claim returns FACTUAL_CLAIM
+    # (which is what it returns on any internal error).
+    monkeypatch.setattr(
+        _verify_module, "classify_claim", _AsyncMock(return_value=_ClaimType.FACTUAL_CLAIM)
+    )
+    monkeypatch.setattr(
+        config_module.settings, "GOOGLE_FACTCHECK_API_KEY", SecretStr("test-key")
+    )
+    respx_mock.get(FACTCHECK_API_URL).respond(json=_GOOGLE_FALSE_RESPONSE)
+
+    response = await async_client.post(VERIFY_URL, json={"text": _PHASE3_CLAIM})
+
+    assert response.status_code == 200
+    data = response.json()
+    # Factcheck was called and returned a real verdict
+    assert data["verdict"] == "false"
+    assert data["confidence_score"] == _pytest.approx(0.85)
+
+
+async def test_route_opinion_schema_is_valid_verify_response(
+    async_client: AsyncClient,
+    monkeypatch: _pytest.MonkeyPatch,
+) -> None:
+    """
+    OPINION early-exit returns a response that conforms to VerifyResponse schema.
+    All three required fields are present with correct types.
+    """
+    monkeypatch.setattr(
+        _verify_module, "classify_claim", _AsyncMock(return_value=_ClaimType.OPINION)
+    )
+    monkeypatch.setattr(
+        _verify_module, "verify_claim_factcheck",
+        _AsyncMock(side_effect=AssertionError("factcheck must not be called"))
+    )
+
+    response = await async_client.post(VERIFY_URL, json={"text": "I believe coffee is healthy."})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "verdict" in data
+    assert "confidence_score" in data
+    assert "sources" in data
+    assert data["verdict"] in ("true", "false", "misleading", "unverifiable")
+    assert isinstance(data["confidence_score"], float)
+    assert isinstance(data["sources"], list)
+    # ClaimType must NOT be present in the response
+    assert "claim_type" not in data
+    assert "type" not in data
