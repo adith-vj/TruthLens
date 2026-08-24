@@ -64,6 +64,32 @@
             <p style="font-size: 12px; color: #94a3b8; background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">No accessible transcript found.</p>
         </div>
 
+        <!-- STATE: ANALYZING VIDEO -->
+        <div id="state-analyzing-video" class="tl-state hidden">
+            <div class="tl-spinner-container">
+                <div class="tl-spinner"></div>
+            </div>
+            <p class="tl-loading-text">Retrieving transcript...</p>
+            <p class="tl-loading-text" style="font-size: 12px; opacity: 0.7;">Processing transcript...</p>
+        </div>
+
+        <!-- STATE: TRANSCRIPT READY -->
+        <div id="state-transcript-ready" class="tl-state hidden">
+            <div class="tl-idle-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+            </div>
+            <p class="tl-idle-text" style="margin-bottom: 8px;">Transcript ready</p>
+            <p id="transcript-stats-info" style="font-size: 13px; color: #cbd5e1; margin-bottom: 8px;">0 transcript segments</p>
+            <p id="transcript-auto-info" style="font-size: 11px; color: #94a3b8; margin-bottom: 16px;">Based on auto-generated captions</p>
+            <button id="continue-video-btn" class="tl-primary-btn">Continue</button>
+        </div>
+
         <!-- STATE: CLAIM READY -->
         <div id="state-ready" class="tl-state hidden">
             <div class="tl-section-label">Selected Claim</div>
