@@ -83,6 +83,23 @@ class Settings(BaseSettings):
     # Kept low: classification is a cheap call and should not block the pipeline.
     CLASSIFIER_TIMEOUT_SECONDS: float = 5.0
 
+    # --- Tavily web search client (Phase 4) ---
+    # API key for the Tavily AI search API.  Obtain a free key (1,000 credits/month,
+    # no credit card required) at https://app.tavily.com
+    # search_depth is always "basic" (1 credit/request); "advanced" costs 2 credits.
+    TAVILY_API_KEY: SecretStr = SecretStr("")
+    # Timeout (seconds) for each Tavily search request.
+    # Web search is slower than a classification call; 8 s is a safe default.
+    SEARCH_TIMEOUT_SECONDS: float = 8.0
+    # Maximum number of results to request per Tavily search.
+    # Each result = 1 Tavily credit with search_depth="basic".
+    SEARCH_MAX_RESULTS: int = 5
+
+    # --- LLM verifier client (Phase 4) ---
+    # Uses the same GEMINI_API_KEY as the classifier.
+    # Separate timeout because the verifier call is heavier (JSON-mode output).
+    LLM_TIMEOUT_SECONDS: float = 15.0
+
     # --- Logging ---
     LOG_LEVEL: str = "INFO"
 

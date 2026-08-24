@@ -52,6 +52,13 @@ def isolate_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         config_module.settings, "GEMINI_API_KEY", SecretStr("")
     )
+    # Phase 4 — Tavily search and LLM verifier.  Reset to safe defaults.
+    monkeypatch.setattr(
+        config_module.settings, "TAVILY_API_KEY", SecretStr("")
+    )
+    monkeypatch.setattr(config_module.settings, "SEARCH_TIMEOUT_SECONDS", 8.0)
+    monkeypatch.setattr(config_module.settings, "SEARCH_MAX_RESULTS", 5)
+    monkeypatch.setattr(config_module.settings, "LLM_TIMEOUT_SECONDS", 15.0)
 
 
 @pytest_asyncio.fixture
