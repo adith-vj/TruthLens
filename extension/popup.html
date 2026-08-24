@@ -1,58 +1,89 @@
 <!DOCTYPE html>
-<html>
-  <head>
+<html lang="en">
+<head>
     <meta charset="UTF-8">
-    
     <title>TruthLens</title>
     <link rel="stylesheet" href="popup.css">
-    <style>
-      body { width: 320px; padding: 15px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #ffffff; }
-      h2 { margin-top: 0; text-align: center; color: #1a1a1a; font-size: 22px; margin-bottom: 15px; }
-      button { width: 100%; padding: 12px; background-color: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: bold; transition: 0.2s; }
-      button:hover { background-color: #1d4ed8; }
-      
-      #statusText { text-align: center; color: #6b7280; font-size: 14px; margin-top: 10px; }
-      
-      /* The Cards for our Data */
-      #results { display: none; margin-top: 15px; }
-      .card { background: #f8fafc; padding: 12px; border-radius: 8px; margin-bottom: 10px; border: 1px solid #e2e8f0; }
-      .label { font-weight: 600; color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
-      .value { font-size: 15px; margin-top: 6px; font-weight: bold; color: #0f172a; }
-      .secondary-btn { 
-        background-color: #f1f5f9; 
-        color: #334155; 
-        border: 1px solid #cbd5e1; 
-        margin-top: 15px; 
-      }
-      .secondary-btn:hover { background-color: #e2e8f0; }
-    </style>
-  </head>
-  <body>
-    <h2>TruthLens</h2>
-    <button id="analyzeBtn">Analyze Page</button>
-    <div id="statusText"></div>
+</head>
+<body>
+    <div id="app" class="app-container">
+        
+        <!-- HEADER -->
+        <header class="tl-header">
+            <h1 class="tl-title">TruthLens</h1>
+        </header>
 
-    <div id="results">
-      <div class="card">
-        <div class="label">Source Reputation</div>
-        <div class="value" id="sourceVal">-</div>
-        <div class="card">
-          <div class="label">Article Tone</div>
-          <div class="value" id="biasVal">-</div>
+        <!-- STATE: EMPTY / IDLE -->
+        <div id="state-idle" class="tl-state">
+            <div class="tl-idle-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+            </div>
+            <p class="tl-idle-text">Select text on any webpage to verify claims.</p>
         </div>
-    
-    <button id="explainBtn" class="secondary-btn">🔍 Explain: Highlight Loaded Language</button>
-      </div>
-      <div class="card">
-        <div class="label">Fact Check</div>
-        <div class="value" id="fakeVal">-</div>
-      </div>
-      <div class="card">
-        <div class="label">Article Tone</div>
-        <div class="value" id="biasVal">-</div>
-      </div>
+
+        <!-- STATE: CLAIM READY -->
+        <div id="state-ready" class="tl-state hidden">
+            <div class="tl-section-label">Selected Claim</div>
+            <div class="tl-claim-box" id="ready-claim-text"></div>
+            <button id="verify-btn" class="tl-primary-btn">Verify Claim</button>
+        </div>
+
+        <!-- STATE: VERIFYING -->
+        <div id="state-verifying" class="tl-state hidden">
+            <div class="tl-spinner-container">
+                <div class="tl-spinner"></div>
+            </div>
+            <p class="tl-loading-text">Analyzing claim and checking sources...</p>
+        </div>
+
+        <!-- STATE: RESULT -->
+        <div id="state-result" class="tl-state hidden">
+            <div class="tl-result-header" id="result-header">
+                <div class="tl-verdict-badge" id="verdict-badge">True</div>
+                <div class="tl-confidence" id="confidence-score">95% confidence</div>
+            </div>
+            
+            <div class="tl-claim-box tl-claim-box--result" id="result-claim-text"></div>
+
+            <div id="sources-container" class="tl-sources-section">
+                <div class="tl-section-label">Sources</div>
+                <div id="sources-list" class="tl-sources-list">
+                    <!-- Sources injected here -->
+                </div>
+            </div>
+
+            <div id="unverifiable-explainer" class="tl-explainer hidden">
+                Available evidence was insufficient to verify this claim or it may be an opinion/advertisement.
+            </div>
+
+            <button id="reset-btn" class="tl-secondary-btn">Close</button>
+        </div>
+
+        <!-- STATE: ERROR -->
+        <div id="state-error" class="tl-state hidden">
+            <div class="tl-error-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                </svg>
+            </div>
+            <p class="tl-error-text" id="error-message">Failed to connect to verification server.</p>
+            <button id="retry-btn" class="tl-secondary-btn">Try Again</button>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 16px 0 12px 0;">
+        <button id="explain-btn" class="tl-secondary-btn" style="font-size: 12px; padding: 6px 12px;">
+            🔍 Highlight Loaded Language
+        </button>
+
     </div>
-    
     <script src="popup.js"></script>
-  </body>
+</body>
 </html>

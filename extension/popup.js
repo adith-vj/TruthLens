@@ -1,88 +1,206 @@
-document.getElementById('analyzeBtn').addEventListener('click', async () => {
-  const statusText = document.getElementById('statusText');
-  const resultsDiv = document.getElementById('results');
-  
-  statusText.innerText = 'Scanning page...';
-  resultsDiv.style.display = 'none';
+/**
+ * @typedef {Object} SourceItem
+ * @property {string} title
+ * @property {string} url
+ * @property {string} publisher
+ */
 
-  // 1. Get the current active tab (Text AND URL)
-  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+/**
+ * @typedef {Object} VerifyResponse
+ * @property {"true" | "false" | "misleading" | "unverifiable"} verdict
+ * @property {number} confidence_score
+ * @property {SourceItem[]} sources
+ */
 
-  chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    function: scrapePageText,
-  }, async (injectionResults) => {
-    
-    if (!injectionResults || !injectionResults[0].result) {
-        statusText.innerText = 'Could not read page text.';
-        return;
+document.addEventListener('DOMContentLoaded', async () => {
+    const states = {
+        idle: document.getElementById('state-idle'),
+        ready: document.getElementById('state-ready'),
+        verifying: document.getElementById('state-verifying'),
+        result: document.getElementById('state-result'),
+        error: document.getElementById('state-error')
+    };
+
+    const ui = {
+        readyClaimText: document.getElementById('ready-claim-text'),
+        verifyBtn: document.getElementById('verify-btn'),
+        resultHeader: document.getElementById('result-header'),
+        verdictBadge: document.getElementById('verdict-badge'),
+        confidenceScore: document.getElementById('confidence-score'),
+        resultClaimText: document.getElementById('result-claim-text'),
+        sourcesContainer: document.getElementById('sources-container'),
+        sourcesList: document.getElementById('sources-list'),
+        unverifiableExplainer: document.getElementById('unverifiable-explainer'),
+        resetBtn: document.getElementById('reset-btn'),
+        retryBtn: document.getElementById('retry-btn'),
+        errorMessage: document.getElementById('error-message')
+    };
+
+    let selectedClaim = "";
+
+    // Switch visible state
+    function showState(stateName) {
+        Object.values(states).forEach(el => el.classList.add('hidden'));
+        states[stateName].classList.remove('hidden');
     }
 
-    const scrapedText = injectionResults[0].result;
+    // Function to run in the context of the webpage
+    function getSelectedText() {
+        return window.getSelection().toString().trim();
+    }
 
+    // 1. Initialize Extension
     try {
-      statusText.innerText = 'Analyzing via TruthLens AI...';
-      
-      // 2. Send both the TEXT and the URL to the FastAPI backend
-      const response = await fetch('http://127.0.0.1:8000/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          text: scrapedText, 
-          url: tab.url // Grabbed directly from the Chrome tab!
-        })
-      });
-      
-      const data = await response.json();
-      
-      // 3. Populate the UI elements
-      document.getElementById('sourceVal').innerText = `${data.source} (${data.historic_bias})`;
-      
-      // Fake News Logic (Remember: LABEL_1 is Real, LABEL_0 is Fake based on our earlier test)
-      const isReal = data.ai_analysis.fake_news.label === 'LABEL_1';
-      const fakeConf = Math.round(data.ai_analysis.fake_news.score * 100);
-      document.getElementById('fakeVal').innerText = isReal ? `✅ Credible (${fakeConf}%)` : `🚨 Fake/Unreliable (${fakeConf}%)`;
+        let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        
+        // Cannot run script on chrome:// URLs
+        if (tab.url.startsWith('chrome://')) {
+            showState('idle');
+            return;
+        }
 
-      // Tone Logic
-      const toneLabel = data.ai_analysis.tone_bias.label; // Will be "NEUTRAL" or "BIASED"
-      const toneConf = Math.round(data.ai_analysis.tone_bias.score * 100);
-      document.getElementById('biasVal').innerText = toneLabel === 'NEUTRAL' ? `⚖️ Objective (${toneConf}%)` : `🎭 Highly Subjective (${toneConf}%)`;
+        // Fallback: send message to content script which has been tracking selection
+        chrome.tabs.sendMessage(tab.id, { action: "getSelectedText" }, (response) => {
+            if (chrome.runtime.lastError) {
+                console.error("Content script not responding:", chrome.runtime.lastError.message);
+                showState('idle');
+                return;
+            }
 
-      // Hide the loading text and show the results dashboard
-      statusText.innerText = '';
-      resultsDiv.style.display = 'block';
-      
+            if (response && response.text) {
+                selectedClaim = response.text;
+                
+                // Truncate if insanely long just for UI display
+                const displayClaim = selectedClaim.length > 300 
+                    ? selectedClaim.substring(0, 300) + "..." 
+                    : selectedClaim;
+                    
+                ui.readyClaimText.textContent = `"${displayClaim}"`;
+                showState('ready');
+            } else {
+                showState('idle');
+            }
+        });
     } catch (err) {
-      statusText.innerText = 'Error: Make sure FastAPI is running.';
-      console.error(err);
+        console.error("Failed to read selection:", err);
+        showState('idle');
     }
-  });
-});
 
-function scrapePageText() {
-  let paragraphs = document.getElementsByTagName('p');
-  let text = '';
-  for (let p of paragraphs) {
-    text += p.innerText + ' ';
-  }
-  return text.substring(0, 2000); 
-}
-// --- NEW EXPLAINER MODE LOGIC ---
-document.getElementById('explainBtn').addEventListener('click', async () => {
-  const statusText = document.getElementById('statusText');
-  statusText.innerText = 'Highlighting loaded words on page...';
+    // 2. Handle Verification
+    ui.verifyBtn.addEventListener('click', async () => {
+        if (!selectedClaim) return;
+        
+        showState('verifying');
 
-  // Get the active tab
-  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        try {
+            // Respecting the actual backend pipeline logic
+            const response = await fetch('http://127.0.0.1:8000/api/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: selectedClaim })
+            });
 
-  // Send a message to content.js injected in that tab
-  chrome.tabs.sendMessage(tab.id, { action: "triggerExplainer" }, (response) => {
-    // Catch errors (like if the user is on a protected chrome:// page)
-    if (chrome.runtime.lastError) {
-      statusText.innerText = 'Error: Try reloading the page.';
-      console.error(chrome.runtime.lastError.message);
-    } else if (response && response.status === "scanning") {
-      statusText.innerText = '✨ Look at the webpage! Highlights applied.';
+            if (!response.ok) {
+                throw new Error(`Server returned ${response.status}`);
+            }
+
+            /** @type {VerifyResponse} */
+            const data = await response.json();
+            
+            renderResult(data);
+            showState('result');
+            
+        } catch (err) {
+            console.error("Verification error:", err);
+            ui.errorMessage.textContent = "Failed to connect to verification server. Ensure the TruthLens backend is running.";
+            showState('error');
+        }
+    });
+
+    // 3. Render Result Logic
+    function renderResult(data) {
+        // Reset classes
+        ui.verdictBadge.className = 'tl-verdict-badge';
+        
+        // Display the claim
+        const displayClaim = selectedClaim.length > 200 
+            ? selectedClaim.substring(0, 200) + "..." 
+            : selectedClaim;
+        ui.resultClaimText.textContent = `"${displayClaim}"`;
+
+        const verdict = data.verdict;
+        const confidenceStr = Math.round(data.confidence_score * 100) + "% confidence";
+        ui.confidenceScore.textContent = confidenceStr;
+
+        // Semantic mapping
+        if (verdict === 'true') {
+            ui.verdictBadge.textContent = "True";
+            ui.verdictBadge.classList.add('verdict-true');
+        } else if (verdict === 'false') {
+            ui.verdictBadge.textContent = "False";
+            ui.verdictBadge.classList.add('verdict-false');
+        } else if (verdict === 'misleading') {
+            ui.verdictBadge.textContent = "Misleading";
+            ui.verdictBadge.classList.add('verdict-misleading');
+        } else {
+            ui.verdictBadge.textContent = "Unverifiable";
+            ui.verdictBadge.classList.add('verdict-unverifiable');
+            // Hide confidence for unverifiable since it's 0.0
+            ui.confidenceScore.textContent = "Opinion or insufficient evidence";
+        }
+
+        // Render sources
+        ui.sourcesList.innerHTML = '';
+        if (data.sources && data.sources.length > 0) {
+            ui.sourcesContainer.classList.remove('hidden');
+            ui.unverifiableExplainer.classList.add('hidden');
+            
+            data.sources.forEach(source => {
+                const a = document.createElement('a');
+                a.className = 'tl-source-card';
+                a.href = source.url;
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
+                
+                const publisherDiv = document.createElement('div');
+                publisherDiv.className = 'tl-source-publisher';
+                publisherDiv.innerHTML = `
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                    ${source.publisher || new URL(source.url).hostname}
+                `;
+                
+                const titleDiv = document.createElement('div');
+                titleDiv.className = 'tl-source-title';
+                titleDiv.textContent = source.title;
+                
+                a.appendChild(publisherDiv);
+                a.appendChild(titleDiv);
+                ui.sourcesList.appendChild(a);
+            });
+        } else {
+            ui.sourcesContainer.classList.add('hidden');
+            ui.unverifiableExplainer.classList.remove('hidden');
+        }
     }
-  });
+
+    // 4. Utility Buttons
+    ui.resetBtn.addEventListener('click', () => {
+        window.close(); // Extension pattern: close popup to "verify another"
+    });
+
+    ui.retryBtn.addEventListener('click', () => {
+        showState('ready'); // Go back to ready to try again
+    });
+
+    // 5. Restore Legacy Feature: Highlight Loaded Language
+    const explainBtn = document.getElementById('explain-btn');
+    if (explainBtn) {
+        explainBtn.addEventListener('click', async () => {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tab.url.startsWith('chrome://')) {
+                chrome.tabs.sendMessage(tab.id, { action: "triggerExplainer" });
+                window.close(); // Close the popup so the user can see the highlights
+            }
+        });
+    }
 });

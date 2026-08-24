@@ -18,10 +18,26 @@ function hideTruthLensToast() {
     }
 }
 
-// Listens for a message from your popup.js to trigger the scan
+// Track the most recent text selection to ensure it's not lost when the popup opens
+let lastSelectedText = "";
+document.addEventListener("selectionchange", () => {
+    const selection = window.getSelection().toString().trim();
+    if (selection) {
+        lastSelectedText = selection;
+    }
+});
+
+// Listens for a message from your popup.js or background.js
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     
     // --- TEXT EXPLAINER LOGIC ---
+    if (request.action === "getSelectedText") {
+        // Fallback to current selection if lastSelectedText is somehow empty
+        const currentSelection = window.getSelection().toString().trim();
+        sendResponse({ text: currentSelection || lastSelectedText });
+        return true;
+    }
+    
     if (request.action === "triggerExplainer") {
         console.log("TruthLens: Explainer Mode Activated");
         
@@ -141,6 +157,85 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }
         });
     }
+
+    // --- TEXT CLAIM VERIFICATION UI INJECTION ---
+    else if (request.action === "showClaimAnalysis") {
+        console.log("TruthLens: Injecting Claim Verification UI");
+        
+        hideTruthLensToast();
+        
+        const existingModal = document.getElementById('truthlens-claim-modal');
+        if (existingModal) existingModal.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'truthlens-claim-modal';
+        overlay.className = 'truthlens-overlay';
+
+        const data = request.analysis;
+        const claimText = request.claimText;
+        
+        // Colors mapping similar to the popup styles
+        let verdictColor, verdictBg, verdictBorder, verdictText;
+        if (data.verdict === 'true') { verdictColor = '#2e7d32'; verdictBg = '#e8f5e9'; verdictBorder = '#c8e6c9'; verdictText = 'True'; }
+        else if (data.verdict === 'false') { verdictColor = '#c62828'; verdictBg = '#ffebee'; verdictBorder = '#ffcdd2'; verdictText = 'False'; }
+        else if (data.verdict === 'misleading') { verdictColor = '#f57f17'; verdictBg = '#fff8e1'; verdictBorder = '#ffecb3'; verdictText = 'Misleading'; }
+        else { verdictColor = '#48484a'; verdictBg = '#f2f2f7'; verdictBorder = '#e5e5ea'; verdictText = 'Unverifiable'; }
+
+        const confidenceStr = data.verdict === 'unverifiable' ? "Opinion or insufficient evidence" : Math.round(data.confidence_score * 100) + "% confidence";
+        const displayClaim = claimText.length > 250 ? claimText.substring(0, 250) + "..." : claimText;
+        
+        let sourcesHtml = '';
+        if (data.sources && data.sources.length > 0) {
+            sourcesHtml = `
+                <div style="font-size: 11px; text-transform: uppercase; font-weight: 600; color: #9ca3af; margin-top: 16px; margin-bottom: 6px;">Sources</div>
+                <div style="display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto;">
+                    ${data.sources.map(s => `
+                        <a href="${s.url}" target="_blank" rel="noopener noreferrer" style="display: block; padding: 10px; background: #fbfbfb; border: 1px solid #e5e5ea; border-radius: 6px; text-decoration: none;">
+                            <div style="font-size: 10px; font-weight: 600; color: #636366; margin-bottom: 4px; text-transform: uppercase;">
+                                🔗 ${s.publisher || new URL(s.url).hostname}
+                            </div>
+                            <div style="font-size: 13px; color: #1c1c1e; font-weight: 500; line-height: 1.4;">${s.title}</div>
+                        </a>
+                    `).join('')}
+                </div>
+            `;
+        } else {
+            sourcesHtml = `
+                <div style="margin-top: 16px; font-size: 13px; color: #636366; background: #fbfbfb; padding: 12px; border-radius: 6px; border: 1px dashed #e5e5ea; text-align: center;">
+                    Available evidence was insufficient to verify this claim or it may be an opinion/advertisement.
+                </div>
+            `;
+        }
+
+        overlay.innerHTML = `
+            <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 999999; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+                <div style="background: white; border-radius: 12px; width: 380px; max-width: 90%; padding: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); position: relative;">
+                    <button id="tl-claim-close-btn" style="position: absolute; top: 12px; right: 12px; background: transparent; border: none; font-size: 20px; cursor: pointer; color: #aeaeb2;">&times;</button>
+                    
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                        <span style="background: ${verdictBg}; color: ${verdictColor}; border: 1px solid ${verdictBorder}; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; text-transform: uppercase;">
+                            ${verdictText}
+                        </span>
+                        <span style="font-size: 12px; color: #636366; font-weight: 500;">
+                            ${confidenceStr}
+                        </span>
+                    </div>
+
+                    <div style="background: #fbfbfb; border: 1px dashed #e5e5ea; border-radius: 6px; padding: 12px; font-size: 14px; color: #636366; line-height: 1.5; margin-bottom: 16px;">
+                        "${displayClaim}"
+                    </div>
+                    
+                    ${sourcesHtml}
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        document.getElementById('tl-claim-close-btn').addEventListener('click', () => {
+            overlay.remove();
+        });
+    }
+
     return true; 
 });
 

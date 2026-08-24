@@ -1,0 +1,326 @@
+:root {
+    --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --bg-main: #ffffff;
+    --bg-secondary: #fbfbfb; /* slightly lighter than f9fafb for subtle contrast */
+    --border-color: #e5e5ea;
+    --text-primary: #1c1c1e;
+    --text-secondary: #636366;
+    --text-muted: #aeaeb2;
+    
+    --primary-btn-bg: #1c1c1e;
+    --primary-btn-text: #ffffff;
+    --primary-btn-hover: #2c2c2e;
+    
+    --secondary-btn-bg: #ffffff;
+    --secondary-btn-border: #d1d1d6;
+    --secondary-btn-hover: #f2f2f7;
+
+    /* Verdict Colors - subtle, restrained backgrounds, sharp text */
+    --verdict-true-bg: #e8f5e9;
+    --verdict-true-text: #2e7d32;
+    --verdict-true-border: #c8e6c9;
+
+    --verdict-false-bg: #ffebee;
+    --verdict-false-text: #c62828;
+    --verdict-false-border: #ffcdd2;
+
+    --verdict-misleading-bg: #fff8e1;
+    --verdict-misleading-text: #f57f17;
+    --verdict-misleading-border: #ffecb3;
+
+    --verdict-unverifiable-bg: #f2f2f7;
+    --verdict-unverifiable-text: #48484a;
+    --verdict-unverifiable-border: #e5e5ea;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    width: 340px; /* Slightly more compact for utility feel */
+    font-family: var(--font-family);
+    background-color: var(--bg-main);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.app-container {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    min-height: 140px;
+}
+
+.tl-header {
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.tl-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+}
+
+.hidden {
+    display: none !important;
+}
+
+.tl-state {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+/* Typography & General */
+.tl-section-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+
+.tl-claim-box {
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 12px;
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--text-primary);
+    word-break: break-word;
+    max-height: 140px;
+    overflow-y: auto;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02); /* Linear style subtle shadow */
+}
+
+.tl-claim-box--result {
+    font-size: 13px;
+    padding: 10px;
+    color: var(--text-secondary);
+    background-color: var(--bg-main);
+    border-style: dashed; /* Differentiates from standard text boxes */
+}
+
+/* Buttons */
+button {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: 6px;
+    padding: 8px 16px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    width: 100%;
+    outline: none;
+}
+
+.tl-primary-btn {
+    background-color: var(--primary-btn-bg);
+    color: var(--primary-btn-text);
+    border: 1px solid transparent;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+.tl-primary-btn:hover {
+    background-color: var(--primary-btn-hover);
+}
+
+.tl-secondary-btn {
+    background-color: var(--secondary-btn-bg);
+    color: var(--text-primary);
+    border: 1px solid var(--secondary-btn-border);
+}
+
+.tl-secondary-btn:hover {
+    background-color: var(--secondary-btn-hover);
+}
+
+/* Idle / Error States */
+.tl-idle-icon, .tl-error-icon {
+    display: flex;
+    justify-content: center;
+    color: var(--text-muted);
+    margin-top: 16px;
+    margin-bottom: 8px;
+}
+
+.tl-idle-text, .tl-error-text {
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 0;
+    line-height: 1.4;
+}
+
+.tl-error-text {
+    color: var(--verdict-false-text);
+}
+.tl-error-icon {
+    color: var(--verdict-false-text);
+}
+
+/* Verifying State */
+.tl-spinner-container {
+    display: flex;
+    justify-content: center;
+    margin: 24px 0 12px;
+}
+
+.tl-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--text-primary);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.tl-loading-text {
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 0;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% { opacity: 0.7; }
+    50% { opacity: 1; }
+    100% { opacity: 0.7; }
+}
+
+/* Result State */
+.tl-result-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.tl-verdict-badge {
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border: 1px solid transparent;
+}
+
+.tl-confidence {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+/* Verdict specific classes */
+.verdict-true {
+    background-color: var(--verdict-true-bg);
+    color: var(--verdict-true-text);
+    border-color: var(--verdict-true-border);
+}
+.verdict-false {
+    background-color: var(--verdict-false-bg);
+    color: var(--verdict-false-text);
+    border-color: var(--verdict-false-border);
+}
+.verdict-misleading {
+    background-color: var(--verdict-misleading-bg);
+    color: var(--verdict-misleading-text);
+    border-color: var(--verdict-misleading-border);
+}
+.verdict-unverifiable {
+    background-color: var(--verdict-unverifiable-bg);
+    color: var(--verdict-unverifiable-text);
+    border-color: var(--verdict-unverifiable-border);
+}
+
+/* Sources */
+.tl-sources-section {
+    margin-top: 2px;
+}
+
+.tl-sources-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 180px;
+    overflow-y: auto;
+    padding-right: 4px; /* for scrollbar */
+}
+
+/* Scrollbar styling for a cleaner look */
+::-webkit-scrollbar {
+    width: 4px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: #d1d1d6;
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #aeaeb2;
+}
+
+.tl-source-card {
+    display: block;
+    padding: 8px 10px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    text-decoration: none;
+    transition: all 0.15s ease;
+}
+
+.tl-source-card:hover {
+    background-color: var(--bg-main);
+    border-color: #c7c7cc;
+}
+
+.tl-source-publisher {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.tl-source-title {
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.35;
+    font-weight: 500;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.tl-explainer {
+    font-size: 13px;
+    color: var(--text-secondary);
+    background-color: var(--bg-secondary);
+    padding: 10px;
+    border-radius: 6px;
+    line-height: 1.4;
+    text-align: center;
+    border: 1px dashed var(--border-color);
+}
