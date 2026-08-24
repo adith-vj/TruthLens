@@ -27,6 +27,43 @@
             <p class="tl-idle-text">Select text on any webpage to verify claims.</p>
         </div>
 
+        <!-- STATE: VIDEO DETECTED (TRANSCRIPT AVAILABLE) -->
+        <div id="state-video-ready" class="tl-state hidden">
+            <div class="tl-idle-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+                    <line x1="7" y1="2" x2="7" y2="22"></line>
+                    <line x1="17" y1="2" x2="17" y2="22"></line>
+                    <line x1="2" y1="12" x2="22" y2="12"></line>
+                    <line x1="2" y1="7" x2="7" y2="7"></line>
+                    <line x1="2" y1="17" x2="7" y2="17"></line>
+                    <line x1="17" y1="17" x2="22" y2="17"></line>
+                    <line x1="17" y1="7" x2="22" y2="7"></line>
+                </svg>
+            </div>
+            <p class="tl-idle-text" style="margin-bottom: 8px;">Video detected on this page.</p>
+            <p id="video-transcript-info" style="font-size: 11px; color: #94a3b8; margin-bottom: 16px;">Transcript capability available.</p>
+            <button id="analyze-video-btn" class="tl-primary-btn">Analyze this video</button>
+        </div>
+
+        <!-- STATE: VIDEO DETECTED (NO TRANSCRIPT) -->
+        <div id="state-video-no-transcript" class="tl-state hidden">
+            <div class="tl-idle-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+                    <line x1="7" y1="2" x2="7" y2="22"></line>
+                    <line x1="17" y1="2" x2="17" y2="22"></line>
+                    <line x1="2" y1="12" x2="22" y2="12"></line>
+                    <line x1="2" y1="7" x2="7" y2="7"></line>
+                    <line x1="2" y1="17" x2="7" y2="17"></line>
+                    <line x1="17" y1="17" x2="22" y2="17"></line>
+                    <line x1="17" y1="7" x2="22" y2="7"></line>
+                </svg>
+            </div>
+            <p class="tl-idle-text" style="margin-bottom: 8px;">Video detected</p>
+            <p style="font-size: 12px; color: #94a3b8; background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">No accessible transcript found.</p>
+        </div>
+
         <!-- STATE: CLAIM READY -->
         <div id="state-ready" class="tl-state hidden">
             <div class="tl-section-label">Selected Claim</div>
