@@ -110,6 +110,10 @@ def create_app() -> FastAPI:
 
     # --- Routers ---
     application.include_router(verify_router, prefix="/api", tags=["Verification"])
+    
+    # Import and register legacy router without prefix to preserve old URLs
+    from app.api.legacy import router as legacy_router
+    application.include_router(legacy_router, tags=["Legacy"])
 
     # --- Health check endpoint ---
     @application.get(

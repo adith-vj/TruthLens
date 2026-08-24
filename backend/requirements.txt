@@ -1,9 +1,16 @@
 # TruthLens Verification Backend — Dependencies
 # Python >= 3.11 required
 #
-# NOTE: Heavy ML dependencies (transformers, mediapipe, Pillow, opencv-python,
-# numpy) used by the legacy backend/main.py are intentionally excluded here.
-# They will be consolidated in a future integration task.
+# NOTE: Legacy ML dependencies (transformers, mediapipe, Pillow, opencv-python,
+# numpy) have been consolidated into the unified architecture.
+
+# --- Machine Learning / Legacy Forensics ---
+transformers
+mediapipe
+Pillow
+opencv-python
+numpy
+torch
 
 # --- Web framework ---
 fastapi>=0.111.0
