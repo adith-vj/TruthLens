@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -268,38 +269,130 @@ _CLAIM_TYPE_MULTIPLIER: dict[str, float] = {
     "advertisement": 0.1,
 }
 
+# Words that strongly imply a concrete, checkable event occurred.
+_SPECIFIC_VERBS: frozenset[str] = frozenset({
+    "killed", "died", "sank", "built", "founded", "launched", "announced",
+    "reported", "measured", "proved", "discovered", "established", "created",
+    "destroyed", "cost", "reached", "weighed", "stood", "held", "carried",
+    "contained", "banned", "passed", "signed", "ratified", "declared",
+    "invented", "patented", "released", "published", "recorded", "won", "lost",
+    "completed", "opened", "closed", "born", "died", "arrested", "convicted",
+})
 
-def _score_claim(raw: dict[str, Any]) -> tuple[float, float]:
+# Hedge words that reduce confidence in a claim's verifiability.
+_HEDGE_WORDS: frozenset[str] = frozenset({
+    "probably", "maybe", "perhaps", "around", "approximately", "roughly",
+    "seems", "appear", "apparently", "allegedly", "rumored", "supposedly",
+    "might", "could", "may", "unclear", "uncertain", "possibly", "likely",
+    "unlikely", "thought", "believed", "estimated", "speculated",
+})
+
+
+def _score_claim(raw: dict[str, Any]) -> tuple[float, float, str]:
     """
-    Return (checkability_score, claim_score) from raw extraction dict.
-    Deterministic — no I/O.
+    Return (checkability_score, claim_score, claim_type) from a raw extraction
+    dict.  Fully deterministic — no I/O, no external calls.
+
+    Four interpretable sub-components (each 0.0 – 1.0):
+
+    1. **specificity**    — How precise/concrete is the claim text itself?
+       - Gemini's ``is_specific`` boolean                     (35%)
+       - Contains actual digit characters (regex)             (25%)
+       - Contains a high-signal verb (``_SPECIFIC_VERBS``)    (20%)
+       - Normalized text length (caps at 20 words)            (20%)
+
+    2. **information_value** — How much factual content does it carry?
+       - Gemini's ``has_numbers`` signal                      (25%)
+       - Gemini's ``has_entities`` signal                     (25%)
+       - Distinct in-text number count (caps at 2)            (20%)
+       - Distinct mid-sentence capitalised words (proxy for
+         named entities; caps at 3)                           (30%)
+
+    3. **confidence** — How free is the claim from hedging language?
+       - Starts at 1.0; each hedge word from ``_HEDGE_WORDS``
+         costs –0.25 (floor 0.0)
+
+    4. **factuality multiplier** — Determined by claim_type:
+       - ``factual_claim`` → 1.0
+       - ``ambiguous``     → 0.5
+       - ``opinion``       → 0.1
+       - ``advertisement`` → 0.1
+
+    checkability_score = 0.40 × specificity
+                       + 0.40 × information_value
+                       + 0.20 × confidence
+
+    claim_score = factuality × checkability_score
+
+    The rule-based classifier is applied as a zero-I/O override of the
+    Gemini-provided claim_type before multiplier lookup.
     """
+    text: str = raw.get("text", "")
+    words = text.split()
+    words_lower_set = {w.lower().strip(".,;:!?\"'") for w in words}
+    word_count = len(words)
+
+    # ── Component 1: Specificity ────────────────────────────────────────────
+    is_spec = bool(raw.get("is_specific", False))
+    has_digits = bool(re.search(r"\d", text))
+    has_specific_verb = bool(words_lower_set & _SPECIFIC_VERBS)
+    # Length bonus: ramp linearly from 0 at 1 word to 1.0 at 20+ words
+    length_score = min(1.0, word_count / 20.0)
+
+    specificity = (
+        0.35 * float(is_spec)
+        + 0.25 * float(has_digits)
+        + 0.20 * float(has_specific_verb)
+        + 0.20 * length_score
+    )
+
+    # ── Component 2: Information value ─────────────────────────────────────
     has_num = bool(raw.get("has_numbers", False))
     has_ent = bool(raw.get("has_entities", False))
-    is_spec = bool(raw.get("is_specific", False))
 
-    checkability = 0.0
-    if has_num:
-        checkability += 0.35
-    if has_ent:
-        checkability += 0.35
-    if is_spec:
-        checkability += 0.30
+    # Count distinct digit-groups in the text (e.g. "1,517" and "1912" = 2)
+    distinct_numbers = re.findall(r"\b\d[\d,\.]*\b", text)
+    num_count_score = min(1.0, len(distinct_numbers) / 2.0)
 
+    # Distinct mid-sentence capitalised words as a named-entity proxy.
+    # Skip the very first word (always capitalised) and common title-case words.
+    mid_caps = {
+        w.strip(".,;:!?\"'")
+        for i, w in enumerate(words)
+        if i > 0 and w and w[0].isupper() and len(w) > 1
+    }
+    entity_count_score = min(1.0, len(mid_caps) / 3.0)
+
+    information_value = (
+        0.25 * float(has_num)
+        + 0.25 * float(has_ent)
+        + 0.20 * num_count_score
+        + 0.30 * entity_count_score
+    )
+
+    # ── Component 3: Confidence (hedge penalty) ─────────────────────────────
+    hedge_count = sum(1 for w in words_lower_set if w in _HEDGE_WORDS)
+    confidence = max(0.0, 1.0 - 0.25 * hedge_count)
+
+    # ── checkability_score (weighted average of the 3 components) ───────────
+    checkability_score = round(
+        0.40 * specificity + 0.40 * information_value + 0.20 * confidence, 4
+    )
+
+    # ── Claim type + rule-based override ────────────────────────────────────
     claim_type = raw.get("claim_type", "factual_claim")
     if claim_type not in _VALID_CLAIM_TYPES:
         claim_type = "ambiguous"
 
-    # Rule-based override: the classifier keyword rules can flip the type
-    # to "opinion" or "advertisement" for clear-cut cases — zero Gemini calls.
-    rule_result = _classify_by_rules(raw.get("text", ""))
+    rule_result = _classify_by_rules(text)
     if rule_result is not None:
         claim_type = rule_result.value
 
-    multiplier = _CLAIM_TYPE_MULTIPLIER.get(claim_type, 0.5)
-    claim_score = checkability * multiplier
+    factuality = _CLAIM_TYPE_MULTIPLIER.get(claim_type, 0.5)
+    claim_score = round(factuality * checkability_score, 4)
 
-    return checkability, claim_score, claim_type  # type: ignore[return-value]
+    return checkability_score, claim_score, claim_type
+
 
 
 # ---------------------------------------------------------------------------
@@ -398,8 +491,8 @@ async def process_video_claims(video_id: str, top_n: int = 12) -> list[Candidate
         "After dedup: %d unique claims for video %s", len(unique_claims), video_id
     )
 
-    # 6. Rank by claim_score descending
-    unique_claims.sort(key=lambda x: x.claim_score, reverse=True)
+    # 6. Rank by claim_score descending; chronological order as tie-breaker
+    unique_claims.sort(key=lambda x: (-x.claim_score, x.start_time))
 
     # 7. Top-N
     return unique_claims[:top_n]
