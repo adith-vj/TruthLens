@@ -12,7 +12,7 @@ from app.services.youtube_transcript import get_transcript
 
 logger = logging.getLogger(__name__)
 
-GEMINI_GENERATE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+GEMINI_GENERATE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent"
 
 EXTRACT_PROMPT = """You are a factual claim extraction AI. Extract externally checkable assertions from the provided transcript chunk. 
 A good claim is a specific assertion about the world, an event, a metric, or a finding that can be fact-checked. 

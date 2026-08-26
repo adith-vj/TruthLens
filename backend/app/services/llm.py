@@ -157,11 +157,11 @@ class LLMParseError(LLMError):
 # ---------------------------------------------------------------------------
 
 # Exported so tests can import for respx URL matching.
-# Model: gemini-2.5-flash (GA, free tier confirmed August 2026).
-# Separate from GEMINI_CLASSIFY_URL in classifier.py (uses gemini-1.5-flash-latest).
+# Model: gemini-3.6-flash (Updated due to API key restrictions for new users).
+# Separate from GEMINI_CLASSIFY_URL in classifier.py
 GEMINI_VERIFY_URL = (
     "https://generativelanguage.googleapis.com"
-    "/v1beta/models/gemini-2.5-flash:generateContent"
+    "/v1beta/models/gemini-3.6-flash:generateContent"
 )
 
 # The four valid verdict values (matches VerdictType in models/verification.py).

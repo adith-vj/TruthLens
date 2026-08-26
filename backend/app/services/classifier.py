@@ -128,7 +128,7 @@ class ClassifierServiceError(ClassifierError):
 # Exported so tests can import it for respx URL matching.
 GEMINI_CLASSIFY_URL = (
     "https://generativelanguage.googleapis.com"
-    "/v1beta/models/gemini-1.5-flash-latest:generateContent"
+    "/v1beta/models/gemini-3.6-flash:generateContent"
 )
 
 # Strict zero-shot classification prompt.
