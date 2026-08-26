@@ -347,6 +347,7 @@ class VideoCapabilityDetector {
         return {
             videoDetected: true,
             platform: 'youtube',
+            videoId: new URLSearchParams(window.location.search).get('v'),
             transcript: {
                 status,
                 source,

@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         videoNoTranscript: document.getElementById('state-video-no-transcript'),
         analyzingVideo: document.getElementById('state-analyzing-video'),
         transcriptReady: document.getElementById('state-transcript-ready'),
+        videoJob: document.getElementById('state-video-job'),
         verifying: document.getElementById('state-verifying'),
         result: document.getElementById('state-result'),
         error: document.getElementById('state-error')
@@ -42,12 +43,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         analyzeVideoBtn: document.getElementById('analyze-video-btn'),
         transcriptStatsInfo: document.getElementById('transcript-stats-info'),
         transcriptAutoInfo: document.getElementById('transcript-auto-info'),
-        continueVideoBtn: document.getElementById('continue-video-btn')
+        continueVideoBtn: document.getElementById('continue-video-btn'),
+        videoJobStats: document.getElementById('video-job-stats'),
+        videoJobClaims: document.getElementById('video-job-claims')
     };
 
     let selectedClaim = "";
     let currentCapability = null;
     let isAnalyzingVideo = false;
+    let pollInterval = null;
 
     // Switch visible state
     function showState(stateName) {
@@ -98,7 +102,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                         } else {
                             ui.videoTranscriptInfo.textContent = "Accessible transcript available.";
                         }
-                        showState('videoReady');
+                        
+                        // Check if job already running
+                        fetch(`http://127.0.0.1:8000/api/video/analyze/video/${currentCapability.videoId}`)
+                        .then(r => {
+                            if (r.ok) return r.json();
+                            throw new Error("Job not found");
+                        }).then(job => {
+                            startPolling(job.job_id);
+                        }).catch(() => {
+                            // No active job found, show ready state
+                            showState('videoReady');
+                        });
+                        
                     } else {
                         showState('videoNoTranscript');
                     }
@@ -147,9 +163,100 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
     
+    function renderJob(job) {
+        ui.videoJobStats.textContent = `${job.completed_claims} / ${job.total_claims} verified`;
+        ui.videoJobClaims.innerHTML = '';
+        
+        job.results.forEach(res => {
+            const div = document.createElement('div');
+            div.style.padding = '8px';
+            div.style.background = 'rgba(255,255,255,0.05)';
+            div.style.borderRadius = '4px';
+            div.style.fontSize = '12px';
+            
+            let statusIcon = '◌ Checking...';
+            let color = '#94a3b8';
+            if (res.status === 'verified') {
+                if (res.verdict === 'true') {
+                    statusIcon = '✓ TRUE';
+                    color = '#10b981';
+                } else if (res.verdict === 'false') {
+                    statusIcon = '✓ FALSE';
+                    color = '#ef4444';
+                } else if (res.verdict === 'misleading') {
+                    statusIcon = '✓ MISLEADING';
+                    color = '#f59e0b';
+                } else {
+                    statusIcon = '✓ ' + res.verdict.toUpperCase();
+                    color = '#f59e0b';
+                }
+            } else if (res.status === 'unverifiable') {
+                statusIcon = '○ Insufficient evidence';
+            } else if (res.status === 'error') {
+                statusIcon = '× Unable to verify — Retry';
+                color = '#ef4444';
+            } else if (res.status === 'pending') {
+                statusIcon = '○ Waiting...';
+            }
+            
+            const mins = Math.floor(res.start_time / 60);
+            const secs = Math.floor(res.start_time % 60).toString().padStart(2, '0');
+            
+            div.innerHTML = `
+                <div style="display: flex; justify-content: space-between; margin-bottom: 4px; color: ${color}; font-weight: bold;">
+                    <span>${statusIcon}</span>
+                    <span>${mins}:${secs}</span>
+                </div>
+                <div style="color: #cbd5e1; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4;">
+                    ${res.text}
+                </div>
+            `;
+            ui.videoJobClaims.appendChild(div);
+        });
+    }
+
+    function startPolling(job_id) {
+        showState('videoJob');
+        if (pollInterval) clearInterval(pollInterval);
+        
+        const poll = async () => {
+            try {
+                const statusResp = await fetch(`http://127.0.0.1:8000/api/video/analyze/${job_id}`);
+                if (statusResp.ok) {
+                    const job = await statusResp.json();
+                    renderJob(job);
+                    if (job.status === 'completed' || job.status === 'failed') {
+                        clearInterval(pollInterval);
+                    }
+                }
+            } catch (e) {
+                console.error("Polling error", e);
+            }
+        };
+        
+        poll();
+        pollInterval = setInterval(poll, 2000);
+    }
+
     if (ui.continueVideoBtn) {
-        ui.continueVideoBtn.addEventListener('click', () => {
-            window.close(); // For Phase 5.3, just close it since claim extraction isn't built yet
+        ui.continueVideoBtn.addEventListener('click', async () => {
+            if (!currentCapability) return;
+            showState('videoJob');
+            
+            try {
+                const response = await fetch('http://127.0.0.1:8000/api/video/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ video_id: currentCapability.videoId })
+                });
+                if (!response.ok) throw new Error("Failed to start analysis");
+                
+                const data = await response.json();
+                startPolling(data.job_id);
+            } catch (err) {
+                ui.errorMessage.textContent = "Failed to start video analysis.";
+                showState('error');
+            }
         });
     }
 

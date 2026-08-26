@@ -4,7 +4,13 @@ from typing import Dict, Any
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
-from app.models.video import VideoTranscriptRequest, VideoTranscriptResponse, VideoClaimsRequest, VideoClaimsResponse
+from app.models.video import (
+    VideoTranscriptRequest, 
+    VideoTranscriptResponse, 
+    VideoClaimsRequest, 
+    VideoClaimsResponse,
+    VideoAnalyzeRequest
+)
 from app.services.youtube_transcript import get_transcript
 
 logger = logging.getLogger(__name__)
@@ -94,3 +100,67 @@ async def extract_video_claims(request: VideoClaimsRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to extract claims due to an internal error."
         )
+
+@router.post("/analyze", response_model=Dict[str, str])
+async def analyze_video(request: VideoAnalyzeRequest):
+    """
+    Initializes a progressive video analysis job.
+    Returns the job_id which can be polled for state and results.
+    """
+    from app.services.video_analysis import start_video_analysis
+    try:
+        job_id = await start_video_analysis(request.video_id)
+        return {"job_id": job_id}
+    except ValueError as ve:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(ve)
+        )
+    except Exception as e:
+        logger.error(f"Failed to start video analysis for {request.video_id}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to start video analysis."
+        )
+
+from app.models.video import VideoAnalysisJobState
+
+@router.get("/analyze/{job_id}", response_model=VideoAnalysisJobState)
+async def get_analysis_status(job_id: str):
+    """
+    Returns the current state of a video analysis job.
+    """
+    from app.services.video_analysis import get_job_state
+    
+    job = get_job_state(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found."
+        )
+        
+    return job
+        
+@router.get("/analyze/video/{video_id}", response_model=VideoAnalysisJobState)
+async def get_analysis_by_video(video_id: str):
+    """
+    Returns the active or completed job for a video_id, if one exists.
+    """
+    from app.services.video_analysis import _jobs_by_video, get_job_state
+    
+    if video_id not in _jobs_by_video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No job found for this video."
+        )
+        
+    job_id = _jobs_by_video[video_id]
+    job = get_job_state(job_id)
+    if not job or job.status == "failed":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No valid job found for this video."
+        )
+        
+    return job
+

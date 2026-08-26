@@ -90,6 +90,17 @@
             <button id="continue-video-btn" class="tl-primary-btn">Continue</button>
         </div>
 
+        <!-- STATE: PROGRESSIVE VIDEO JOB -->
+        <div id="state-video-job" class="tl-state hidden" style="text-align: left;">
+            <div class="tl-section-label" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <span>Video Analysis</span>
+                <span id="video-job-stats" style="font-size: 11px; color: #94a3b8; font-weight: normal;">0 / 0 verified</span>
+            </div>
+            <div id="video-job-claims" style="max-height: 250px; overflow-y: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 8px;">
+                <!-- Claims injected here -->
+            </div>
+        </div>
+
         <!-- STATE: CLAIM READY -->
         <div id="state-ready" class="tl-state hidden">
             <div class="tl-section-label">Selected Claim</div>

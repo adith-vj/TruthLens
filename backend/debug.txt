@@ -1,0 +1,24 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading Fake News Engine...
+
+Loading weights:   0%|          | 0/104 [00:00<?, ?it/s]
+Loading weights: 100%|##########| 104/104 [00:00<00:00, 2845.99it/s]
+Loading Tone/Bias Engine...
+
+Loading weights:   0%|          | 0/105 [00:00<?, ?it/s]
+Loading weights: 100%|##########| 105/105 [00:00<00:00, 9514.39it/s]
+Loading Deepfake Vision Engine...
+
+Loading weights:   0%|          | 0/449 [00:00<?, ?it/s]
+Loading weights: 100%|##########| 449/449 [00:00<00:00, 10913.80it/s]
+
+Loading weights:   0%|          | 0/200 [00:00<?, ?it/s]
+Loading weights: 100%|##########| 200/200 [00:00<00:00, 2530.53it/s]
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+WARNING: Logging before InitGoogle() is written to STDERR
+W0000 00:00:1787774837.764169   24932 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+All engines online!
+BlazeFace face detector loaded.
+STATUS: 200
+TEXT: null
+JSON: None
