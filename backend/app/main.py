@@ -111,6 +111,9 @@ def create_app() -> FastAPI:
     # --- Routers ---
     application.include_router(verify_router, prefix="/api", tags=["Verification"])
     
+    from app.api.video import router as video_router
+    application.include_router(video_router, prefix="/api/video", tags=["Video"])
+    
     # Import and register legacy router without prefix to preserve old URLs
     from app.api.legacy import router as legacy_router
     application.include_router(legacy_router, tags=["Legacy"])
