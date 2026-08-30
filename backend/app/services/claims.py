@@ -409,7 +409,13 @@ async def process_video_claims(video_id: str, top_n: int = 12) -> list[Candidate
       - 0 follow-up classification requests (rule-based override only)
     """
     # 1. Fetch transcript (Phase 5.3, synchronous)
-    transcript_data = get_transcript(video_id)
+    from app.api.video import _transcript_cache
+    if video_id in _transcript_cache:
+        transcript_data = _transcript_cache[video_id]
+        logger.info("process_video_claims: Reusing transcript from cache for %s", video_id)
+    else:
+        transcript_data = get_transcript(video_id)
+
     segments = transcript_data.get("segments", [])
 
     if not segments:

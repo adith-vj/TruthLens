@@ -244,6 +244,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             showState('videoJob');
             
             try {
+                // Phase 5.4: Generate claims
+                const claimsResponse = await fetch('http://127.0.0.1:8000/api/video/claims', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ video_id: currentCapability.videoId })
+                });
+                
+                if (!claimsResponse.ok) throw new Error("Failed to extract claims");
+                
+                // Phase 5.5: Start progressive analysis
                 const response = await fetch('http://127.0.0.1:8000/api/video/analyze', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -254,7 +264,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const data = await response.json();
                 startPolling(data.job_id);
             } catch (err) {
-                ui.errorMessage.textContent = "Failed to start video analysis.";
+                ui.errorMessage.textContent = err.message || "Failed to start video analysis.";
                 showState('error');
             }
         });

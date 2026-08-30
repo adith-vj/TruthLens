@@ -9,8 +9,6 @@ from pydantic import BaseModel
 from app.models.video import CandidateClaim, VideoAnalysisJobState, VideoAnalysisResult
 from app.models.verification import VerifyRequest, VerifyResponse
 from app.api.verify import verify_claim
-from app.services.claims import process_video_claims
-from app.services.youtube_transcript import get_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +43,10 @@ async def start_video_analysis(video_id: str) -> str:
         if _jobs[j_id].status in ("pending", "running", "completed"):
             return j_id
             
+    from app.api.video import _claims_cache
+    if video_id not in _claims_cache:
+        raise ValueError("Phase 5.4 claims not found for this video. Please generate claims first.")
+            
     job_id = str(uuid.uuid4())
     job = VideoAnalysisJobState(
         job_id=job_id,
@@ -76,13 +78,18 @@ async def _run_video_analysis(job_id: str, video_id: str):
     job.updated_at = time.time()
     
     try:
+        from app.api.video import _claims_cache, _transcript_cache
+        
         # We need video metadata (is_auto_generated, language)
-        transcript_data = get_transcript(video_id)
-        job.is_auto_generated = transcript_data.get("is_auto_generated", False)
-        job.language = transcript_data.get("language", "")
+        if video_id in _transcript_cache:
+            transcript_data = _transcript_cache[video_id]
+            job.is_auto_generated = transcript_data.get("is_auto_generated", False)
+            job.language = transcript_data.get("language", "")
         
         # 1. Phase 5.4 - Extract Claims
-        claims = await process_video_claims(video_id, top_n=3)
+        claims_response = _claims_cache[video_id]
+        claims = claims_response.selected_claims
+        
         if not claims:
             job.status = "completed"
             job.updated_at = time.time()

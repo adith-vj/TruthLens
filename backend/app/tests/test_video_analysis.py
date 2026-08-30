@@ -14,12 +14,16 @@ from app.services.video_analysis import (
 )
 from app.models.video import CandidateClaim
 from app.models.verification import VerifyResponse
+from app.api.video import _claims_cache, _transcript_cache
+from app.models.video import VideoClaimsResponse
 
 @pytest.fixture(autouse=True)
 def clear_jobs():
     """Clear jobs state before each test."""
     _jobs.clear()
     _jobs_by_video.clear()
+    _claims_cache.clear()
+    _transcript_cache.clear()
 
 # Helpers
 def _mock_claim(text="test", start=0.0, end=1.0, ctype="factual_claim"):
@@ -35,33 +39,36 @@ def _mock_claim(text="test", start=0.0, end=1.0, ctype="factual_claim"):
 def _mock_verify_res(verdict="true", conf=0.9):
     return VerifyResponse(verdict=verdict, confidence_score=conf, sources=[])
 
+
+def _set_mocks(video_id="v1", claims=None):
+    if claims is None:
+        claims = []
+    _claims_cache[video_id] = VideoClaimsResponse(video_id=video_id, total_candidates=len(claims), selected_claims=claims)
+    _transcript_cache[video_id] = {"is_auto_generated": False, "language": "en"}
+
 # 1. job creation & 2. job retrieval
 @pytest.mark.asyncio
 async def test_job_creation_and_retrieval():
-    with patch("app.services.video_analysis.get_transcript") as mock_t, \
-         patch("app.services.video_analysis.process_video_claims", new=AsyncMock(return_value=[])):
-        mock_t.return_value = {"is_auto_generated": False, "language": "en"}
+    _set_mocks("v1")
         
-        job_id = await start_video_analysis("v1")
-        assert job_id is not None
-        
-        job = get_job_state(job_id)
-        assert job is not None
-        assert job.job_id == job_id
-        assert job.video_id == "v1"
+    job_id = await start_video_analysis("v1")
+    assert job_id is not None
+    
+    job = get_job_state(job_id)
+    assert job is not None
+    assert job.job_id == job_id
+    assert job.video_id == "v1"
 
 # 3. job lifecycle
 @pytest.mark.asyncio
 async def test_job_lifecycle_empty_claims():
-    with patch("app.services.video_analysis.get_transcript") as mock_t, \
-         patch("app.services.video_analysis.process_video_claims", new=AsyncMock(return_value=[])):
-        mock_t.return_value = {"is_auto_generated": False, "language": "en"}
+    _set_mocks("v1")
         
-        job_id = await start_video_analysis("v1")
-        # Give it a moment to complete
-        await asyncio.sleep(0.01)
-        job = get_job_state(job_id)
-        assert job.status == "completed"
+    job_id = await start_video_analysis("v1")
+    # Give it a moment to complete
+    await asyncio.sleep(0.01)
+    job = get_job_state(job_id)
+    assert job.status == "completed"
 
 # 4. verification concurrency limit & 5. progressive result availability
 @pytest.mark.asyncio
@@ -80,11 +87,8 @@ async def test_concurrency_and_progressive():
         await asyncio.sleep(0.1) # Artificially slow down
         in_flight -= 1
         return _mock_verify_res("true")
-        
-    with patch("app.services.video_analysis.get_transcript") as mock_t, \
-         patch("app.services.video_analysis.process_video_claims", new=AsyncMock(return_value=claims)), \
-         patch("app.services.video_analysis.verify_claim", side_effect=slow_verify):
-        mock_t.return_value = {"is_auto_generated": False, "language": "en"}
+    with patch("app.services.video_analysis.verify_claim", side_effect=slow_verify):
+        _set_mocks("v1", claims)
         
         job_id = await start_video_analysis("v1")
         
@@ -121,11 +125,8 @@ async def test_mixed_results_and_failure_isolation():
             return _mock_verify_res("unverifiable")
         elif req.text == "Error":
             raise HTTPException(status_code=502, detail="Upstream error")
-            
-    with patch("app.services.video_analysis.get_transcript") as mock_t, \
-         patch("app.services.video_analysis.process_video_claims", new=AsyncMock(return_value=claims)), \
-         patch("app.services.video_analysis.verify_claim", side_effect=mixed_verify):
-        mock_t.return_value = {"is_auto_generated": False, "language": "en"}
+    with patch("app.services.video_analysis.verify_claim", side_effect=mixed_verify):
+        _set_mocks("v1", claims)
         
         job_id = await start_video_analysis("v1")
         await asyncio.sleep(0.05)
@@ -159,11 +160,8 @@ async def test_final_result_ordering():
         delay = [0.1, 0.01, 0.05, 0.2, 0.02][idx]
         await asyncio.sleep(delay)
         return _mock_verify_res("true")
-        
-    with patch("app.services.video_analysis.get_transcript") as mock_t, \
-         patch("app.services.video_analysis.process_video_claims", new=AsyncMock(return_value=claims)), \
-         patch("app.services.video_analysis.verify_claim", side_effect=random_verify):
-        mock_t.return_value = {"is_auto_generated": False, "language": "en"}
+    with patch("app.services.video_analysis.verify_claim", side_effect=random_verify):
+        _set_mocks("v1", claims)
         
         job_id = await start_video_analysis("v1")
         await asyncio.sleep(0.3)
@@ -177,43 +175,37 @@ async def test_final_result_ordering():
 # 11, 12, 13. duplicate prevention, cache reuse
 @pytest.mark.asyncio
 async def test_duplicate_prevention_cache_reuse():
-    with patch("app.services.video_analysis.get_transcript") as mock_t, \
-         patch("app.services.video_analysis.process_video_claims", new=AsyncMock(return_value=[])):
-        mock_t.return_value = {"is_auto_generated": False, "language": "en"}
+    _set_mocks("v1")
         
-        job_id1 = await start_video_analysis("v1")
-        job_id2 = await start_video_analysis("v1") # While running/pending
-        assert job_id1 == job_id2
+    job_id1 = await start_video_analysis("v1")
+    job_id2 = await start_video_analysis("v1") # While running/pending
+    assert job_id1 == job_id2
         
-        await asyncio.sleep(0.01) # Wait for complete
-        job = get_job_state(job_id1)
-        assert job.status == "completed"
+    await asyncio.sleep(0.01) # Wait for complete
+    job = get_job_state(job_id1)
+    assert job.status == "completed"
         
-        job_id3 = await start_video_analysis("v1") # After complete
-        assert job_id1 == job_id3
+    job_id3 = await start_video_analysis("v1") # After complete
+    assert job_id1 == job_id3
 
 # 14. zero selected claims
 @pytest.mark.asyncio
 async def test_zero_selected_claims():
-    with patch("app.services.video_analysis.get_transcript") as mock_t, \
-         patch("app.services.video_analysis.process_video_claims", new=AsyncMock(return_value=[])):
-        mock_t.return_value = {"is_auto_generated": False, "language": "en"}
+    _set_mocks("v1")
         
-        job_id = await start_video_analysis("v1")
-        await asyncio.sleep(0.01)
-        job = get_job_state(job_id)
-        assert job.status == "completed"
-        assert job.total_claims == 0
-        assert len(job.results) == 0
+    job_id = await start_video_analysis("v1")
+    await asyncio.sleep(0.01)
+    job = get_job_state(job_id)
+    assert job.status == "completed"
+    assert job.total_claims == 0
+    assert len(job.results) == 0
 
 # 15. transcript/claim acquisition failure
 @pytest.mark.asyncio
 async def test_transcript_acquisition_failure():
-    with patch("app.services.video_analysis.get_transcript", side_effect=ValueError("No transcript")):
-        job_id = await start_video_analysis("v1")
-        await asyncio.sleep(0.01)
-        job = get_job_state(job_id)
-        assert job.status == "failed"
+    # If no claims in cache, it should raise ValueError synchronously
+    with pytest.raises(ValueError, match="Phase 5.4 claims not found"):
+        await start_video_analysis("v1")
 
 # 17. client disconnect / job continuation
 # This is implicit since we use asyncio.create_task and don't tie it to a Request object.
@@ -225,22 +217,38 @@ async def test_polling_endpoint():
     from fastapi.testclient import TestClient
     from app.main import app
     client = TestClient(app)
+    _set_mocks("poll-test")
     
-    with patch("app.services.video_analysis.get_transcript") as mock_t, \
-         patch("app.services.video_analysis.process_video_claims", new=AsyncMock(return_value=[])):
-        mock_t.return_value = {"is_auto_generated": False, "language": "en"}
-        
-        # Start
-        resp = client.post("/api/video/analyze", json={"video_id": "poll-test"})
-        assert resp.status_code == 200
-        job_id = resp.json()["job_id"]
+    # Start
+    resp = client.post("/api/video/analyze", json={"video_id": "poll-test"})
+    assert resp.status_code == 200
+    job_id = resp.json()["job_id"]
         
         # Poll
-        resp2 = client.get(f"/api/video/analyze/{job_id}")
-        assert resp2.status_code == 200
-        assert resp2.json()["job_id"] == job_id
+    resp2 = client.get(f"/api/video/analyze/{job_id}")
+    assert resp2.status_code == 200
+    assert resp2.json()["job_id"] == job_id
         
         # Wait
-        await asyncio.sleep(0.02)
-        resp3 = client.get(f"/api/video/analyze/{job_id}")
-        assert resp3.json()["status"] == "completed"
+    await asyncio.sleep(0.02)
+    resp3 = client.get(f"/api/video/analyze/{job_id}")
+    assert resp3.json()["status"] == "completed"
+
+
+# 19. Verify get_transcript is NOT called if claims exist
+@pytest.mark.asyncio
+async def test_zero_transcript_calls():
+    _set_mocks("v1")
+    with patch("app.services.youtube_transcript.get_transcript") as mock_t:
+        job_id = await start_video_analysis("v1")
+        await asyncio.sleep(0.01)
+        mock_t.assert_not_called()
+
+# 20. Fail cleanly without claims
+@pytest.mark.asyncio
+async def test_fails_without_claims_zero_transcript_calls():
+    # DO NOT set mocks
+    with patch("app.services.youtube_transcript.get_transcript") as mock_t:
+        with pytest.raises(ValueError, match="Phase 5.4 claims not found"):
+            await start_video_analysis("v1")
+        mock_t.assert_not_called()
