@@ -3,14 +3,20 @@ import time
 import uuid
 import logging
 from typing import Dict
-from fastapi import HTTPException
 from pydantic import BaseModel
 
 from app.models.video import CandidateClaim, VideoAnalysisJobState, VideoAnalysisResult
-from app.models.verification import VerifyRequest, VerifyResponse
-from app.api.verify import verify_claim
+from app.services.video_verify import verify_video_claim, UsageMetrics, clear_verify_cache
 
 logger = logging.getLogger(__name__)
+
+
+def _fmt_ts(seconds: float) -> str:
+    """Format seconds as MM:SS for use in claim context strings."""
+    m = int(seconds) // 60
+    s = int(seconds) % 60
+    return f"{m}:{s:02d}"
+
 
 # TTL caching
 VIDEO_JOB_TTL_SECONDS = 3600
@@ -117,27 +123,43 @@ async def _run_video_analysis(job_id: str, video_id: str):
             async with sem:
                 res = job.results[index]
                 try:
-                    # Invoke the existing verify endpoint logic directly
-                    v_req = VerifyRequest(text=claim.text)
-                    v_res: VerifyResponse = await verify_claim(v_req)
-                    
+                    # Use the video-specific Gemini-first / Tavily-escalation pipeline.
+                    # This does NOT call /api/verify — it uses verify_video_claim()
+                    # from services/video_verify.py which reuses the underlying
+                    # factcheck, search, and llm primitives directly.
+                    v_res = await verify_video_claim(
+                        claim=claim,
+                        video_id=video_id,
+                        context=f"Timestamp: {_fmt_ts(claim.start_time)}–{_fmt_ts(claim.end_time)}",
+                    )
+
                     if v_res.verdict == "unverifiable":
                         res.status = "unverifiable"
                     else:
                         res.status = "verified"
-                        
+
                     res.verdict = v_res.verdict
                     res.confidence_score = v_res.confidence_score
                     res.sources = v_res.sources
+
+                    # Accumulate per-job usage metrics (convert dataclass → Pydantic model)
+                    from app.models.video import VideoUsageMetrics
+                    m = v_res.metrics
+                    job.usage_metrics = VideoUsageMetrics(
+                        google_factcheck_calls=job.usage_metrics.google_factcheck_calls + m.google_factcheck_calls,
+                        gemini_first_pass_calls=job.usage_metrics.gemini_first_pass_calls + m.gemini_first_pass_calls,
+                        gemini_evidence_calls=job.usage_metrics.gemini_evidence_calls + m.gemini_evidence_calls,
+                        tavily_calls=job.usage_metrics.tavily_calls + m.tavily_calls,
+                    )
+
                     job.completed_claims += 1
-                except HTTPException as e:
-                    res.status = "error"
-                    job.failed_claims += 1
-                    logger.error(f"HTTPException verifying claim (Job: {job_id}, Index: {index}): {e.detail}")
                 except Exception as e:
                     res.status = "error"
                     job.failed_claims += 1
-                    logger.error(f"Error verifying claim (Job: {job_id}, Index: {index}): {e}", exc_info=True)
+                    logger.error(
+                        "Error verifying claim (Job: %s, Index: %d): %s",
+                        job_id, index, e, exc_info=True,
+                    )
                 finally:
                     job.updated_at = time.time()
 

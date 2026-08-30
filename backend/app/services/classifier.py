@@ -216,6 +216,9 @@ _AD_WEAK_PHRASES: tuple[str, ...] = (
 # Mapping from normalized Gemini response labels to ClaimType members.
 # Built once at import time; includes every valid ClaimType value.
 _LABEL_TO_CLAIM_TYPE: dict[str, ClaimType] = {ct.value: ct for ct in ClaimType}
+# Add common shorthand mappings that the model might generate
+_LABEL_TO_CLAIM_TYPE["fact"] = ClaimType.FACTUAL_CLAIM
+_LABEL_TO_CLAIM_TYPE["factual"] = ClaimType.FACTUAL_CLAIM
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +301,9 @@ async def _classify_with_gemini(text: str) -> ClaimType:
         "contents": [{"parts": [{"text": _CLASSIFIER_PROMPT.format(text=text)}]}],
         "generationConfig": {
             "temperature": 0.0,
-            "maxOutputTokens": 20,
+            # Increased from 20 to 100 because the model might spend tokens on implicit
+            # chain-of-thought ("thoughts") before emitting the actual label.
+            "maxOutputTokens": 100,
             "candidateCount": 1,
             "stopSequences": ["\n"],
         },

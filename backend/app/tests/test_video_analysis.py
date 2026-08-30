@@ -14,6 +14,7 @@ from app.services.video_analysis import (
 )
 from app.models.video import CandidateClaim
 from app.models.verification import VerifyResponse
+from app.services.video_verify import VideoVerifyResult, UsageMetrics
 from app.api.video import _claims_cache, _transcript_cache
 from app.models.video import VideoClaimsResponse
 
@@ -37,7 +38,8 @@ def _mock_claim(text="test", start=0.0, end=1.0, ctype="factual_claim"):
     )
 
 def _mock_verify_res(verdict="true", conf=0.9):
-    return VerifyResponse(verdict=verdict, confidence_score=conf, sources=[])
+    return VideoVerifyResult(verdict=verdict, confidence_score=conf, sources=[], metrics=UsageMetrics())
+
 
 
 def _set_mocks(video_id="v1", claims=None):
@@ -79,7 +81,7 @@ async def test_concurrency_and_progressive():
     in_flight = 0
     max_in_flight = 0
     
-    async def slow_verify(req):
+    async def slow_verify(claim, video_id, context=""):
         nonlocal verify_calls, in_flight, max_in_flight
         verify_calls += 1
         in_flight += 1
@@ -87,7 +89,7 @@ async def test_concurrency_and_progressive():
         await asyncio.sleep(0.1) # Artificially slow down
         in_flight -= 1
         return _mock_verify_res("true")
-    with patch("app.services.video_analysis.verify_claim", side_effect=slow_verify):
+    with patch("app.services.video_analysis.verify_video_claim", side_effect=slow_verify):
         _set_mocks("v1", claims)
         
         job_id = await start_video_analysis("v1")
@@ -109,6 +111,7 @@ async def test_concurrency_and_progressive():
         assert job.completed_claims == 5
         assert max_in_flight <= 3 # Max concurrency
 
+
 # 6, 7, 8, 9, 16. successful, unverifiable, error claims and failure isolation
 @pytest.mark.asyncio
 async def test_mixed_results_and_failure_isolation():
@@ -118,14 +121,14 @@ async def test_mixed_results_and_failure_isolation():
         _mock_claim("Error"),
     ]
     
-    async def mixed_verify(req):
-        if req.text == "Success":
+    async def mixed_verify(claim, video_id, context=""):
+        if claim.text == "Success":
             return _mock_verify_res("true")
-        elif req.text == "Unverif":
+        elif claim.text == "Unverif":
             return _mock_verify_res("unverifiable")
-        elif req.text == "Error":
-            raise HTTPException(status_code=502, detail="Upstream error")
-    with patch("app.services.video_analysis.verify_claim", side_effect=mixed_verify):
+        elif claim.text == "Error":
+            raise Exception("Simulated error")
+    with patch("app.services.video_analysis.verify_video_claim", side_effect=mixed_verify):
         _set_mocks("v1", claims)
         
         job_id = await start_video_analysis("v1")
@@ -148,19 +151,20 @@ async def test_mixed_results_and_failure_isolation():
         r_err = next(r for r in job.results if r.text == "Error")
         assert r_err.status == "error"
 
+
 # 10. final result ordering
 @pytest.mark.asyncio
 async def test_final_result_ordering():
     claims = [_mock_claim(f"C{i}") for i in range(5)]
     
     # Complete in random order to test stability
-    async def random_verify(req):
-        idx = int(req.text[1:])
+    async def random_verify(claim, video_id, context=""):
+        idx = int(claim.text[1:])
         # Deliberately delay some more than others
         delay = [0.1, 0.01, 0.05, 0.2, 0.02][idx]
         await asyncio.sleep(delay)
         return _mock_verify_res("true")
-    with patch("app.services.video_analysis.verify_claim", side_effect=random_verify):
+    with patch("app.services.video_analysis.verify_video_claim", side_effect=random_verify):
         _set_mocks("v1", claims)
         
         job_id = await start_video_analysis("v1")
@@ -171,6 +175,7 @@ async def test_final_result_ordering():
         # Order should exactly match claims input
         for i, c in enumerate(claims):
             assert job.results[i].text == c.text
+
 
 # 11, 12, 13. duplicate prevention, cache reuse
 @pytest.mark.asyncio

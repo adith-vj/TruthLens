@@ -80,8 +80,9 @@ class Settings(BaseSettings):
 
     # --- Gemini classifier client ---
     # Timeout (seconds) for each HTTP request to the Gemini API.
-    # Kept low: classification is a cheap call and should not block the pipeline.
-    CLASSIFIER_TIMEOUT_SECONDS: float = 5.0
+    # Increased to 10.0s to accommodate implicit chain-of-thought generation.
+    CLASSIFIER_TIMEOUT_SECONDS: float = 10.0
+
 
     # --- Tavily web search client (Phase 4) ---
     # API key for the Tavily AI search API.  Obtain a free key (1,000 credits/month,
@@ -99,6 +100,20 @@ class Settings(BaseSettings):
     # Uses the same GEMINI_API_KEY as the classifier.
     # Separate timeout because the verifier call is heavier (JSON-mode output).
     LLM_TIMEOUT_SECONDS: float = 15.0
+
+    # --- Video verification (Phase 5.5) ---
+    # Gemini first-pass: minimum confidence required to skip Tavily.
+    # All four eligibility conditions must be satisfied; this is one of them.
+    GEMINI_FIRST_PASS_CONFIDENCE_THRESHOLD: float = 0.80
+    # Niche-claim heuristic: claims whose Phase-5.4 checkability_score is at
+    # or above this value are considered unusually specific and are always
+    # escalated to Tavily even when Gemini returns high confidence.
+    # 0.90 is intentionally conservative — ordinary claims score 0.70–0.85.
+    NICHE_CLAIM_CHECKABILITY_THRESHOLD: float = 0.90
+    # Pipeline version string included in the video verification cache key.
+    # Bump this whenever prompt, thresholds, or escalation logic changes so
+    # that old cached results are automatically invalidated.
+    VIDEO_VERIFICATION_PIPELINE_VERSION: str = "v2"
 
     # --- Logging ---
     LOG_LEVEL: str = "INFO"

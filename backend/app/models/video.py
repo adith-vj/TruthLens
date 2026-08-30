@@ -38,6 +38,13 @@ class VideoClaimsResponse(BaseModel):
 class VideoAnalyzeRequest(BaseModel):
     video_id: str = Field(..., description="The YouTube video ID to analyze and verify claims for.")
 
+class VideoUsageMetrics(BaseModel):
+    """Accumulated API usage counts for a video analysis job."""
+    google_factcheck_calls: int = 0
+    gemini_first_pass_calls: int = 0
+    gemini_evidence_calls: int = 0
+    tavily_calls: int = 0
+
 class VideoAnalysisResult(BaseModel):
     text: str
     start_time: float
@@ -62,4 +69,6 @@ class VideoAnalysisJobState(BaseModel):
     updated_at: float
     is_auto_generated: bool = False
     language: str = ""
+    usage_metrics: VideoUsageMetrics = Field(default_factory=VideoUsageMetrics)
+
 

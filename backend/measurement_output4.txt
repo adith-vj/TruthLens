@@ -1,0 +1,14 @@
+
+=== TruthLens Phase 5.5 API Call Measurement ===
+Video ID: Rpq1P7TiBD0
+
+Fetching Phase 5.4 claims (this makes real YouTube + Gemini requests)...
+Gemini claim extraction HTTP 429: {
+Got 0 claims.
+
+
+No claims extracted. Exiting.
+  "error": {
+    "code": 429,
+    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota ex
+No claims extracted for video Rpq1P7TiBD0
