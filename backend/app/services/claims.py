@@ -43,6 +43,10 @@ import re
 from difflib import SequenceMatcher
 from typing import Any
 
+class ClaimExtractionError(Exception):
+    """Raised when claim extraction fails (e.g. rate limit, malformed JSON)."""
+    pass
+
 import httpx
 
 from app.core.config import settings
@@ -58,7 +62,7 @@ logger = logging.getLogger(__name__)
 
 GEMINI_GENERATE_URL = (
     "https://generativelanguage.googleapis.com"
-    "/v1beta/models/gemini-3.6-flash:generateContent"
+    "/v1beta/models/gemini-3.5-flash-lite:generateContent"
 )
 
 # Target: keep each batch under this many transcript characters (~750k tokens).
@@ -241,22 +245,147 @@ async def _call_gemini(transcript_text: str, api_key: str) -> list[dict[str, Any
         parsed = json.loads(raw_text)
 
         if not isinstance(parsed, list):
-            logger.error("Gemini returned non-list JSON for claims: %s", type(parsed))
-            return []
+            raise ClaimExtractionError(f"Expected list, got {type(parsed)}")
 
         return parsed
 
     except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
         logger.error(
             "Gemini claim extraction HTTP %d: %s",
-            exc.response.status_code,
+            status,
             exc.response.text[:300],
         )
-        return []
+        if status == 429:
+            raise ClaimExtractionError("Gemini quota exceeded (HTTP 429)") from exc
+        raise ClaimExtractionError(f"Gemini HTTP error {status}") from exc
+    except httpx.TimeoutException as exc:
+        logger.error("Gemini claim extraction timed out.")
+        raise ClaimExtractionError("Gemini timeout") from exc
     except Exception as exc:
+        if isinstance(exc, ClaimExtractionError):
+            raise
         logger.error("Gemini claim extraction failed: %s", exc)
-        return []
+        raise ClaimExtractionError(f"Gemini failed: {exc}") from exc
 
+
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Groq fallback request
+# ---------------------------------------------------------------------------
+
+
+def _chunk_text_for_groq(text: str, max_chars: int) -> list[str]:
+    """
+    Splits a large transcript batch into smaller sub-batches for Groq.
+    Preserves existing timestamps by splitting only on line breaks.
+    """
+    lines = text.split("\n")
+    batches = []
+    current_lines = []
+    current_len = 0
+    
+    for line in lines:
+        line_len = len(line) + 1  # +1 for newline
+        if current_lines and current_len + line_len > max_chars:
+            batches.append("\n".join(current_lines))
+            current_lines = []
+            current_len = 0
+        current_lines.append(line)
+        current_len += line_len
+        
+    if current_lines:
+        batches.append("\n".join(current_lines))
+        
+    return batches
+
+async def _call_groq(transcript_text: str, api_key: str, model: str) -> list[dict[str, Any]]:
+    """
+    Send a request to Groq's OpenAI-compatible endpoint as a fallback.
+    """
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": _EXTRACT_PROMPT.format(transcript_text=transcript_text)
+            }
+        ],
+        "temperature": 0.0,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            
+            logger.debug("Groq model configured: %s", model)
+            logger.debug("Groq HTTP status: %d", response.status_code)
+            
+            response.raise_for_status()
+            
+            try:
+                data = response.json()
+            except Exception as e:
+                logger.error("Groq response is not valid JSON. Response text preview: %s", response.text[:300])
+                raise
+                
+        has_choices = "choices" in data
+        logger.debug("Groq response contains 'choices': %s", has_choices)
+        if has_choices:
+            logger.debug("Groq number of choices: %d", len(data["choices"]))
+            if len(data["choices"]) > 0:
+                choice = data["choices"][0]
+                has_message = "message" in choice
+                logger.debug("Groq choice 0 contains 'message': %s", has_message)
+                if has_message:
+                    content_val = choice["message"].get("content")
+                    if content_val is not None:
+                        logger.debug("Groq message.content length: %d", len(str(content_val)))
+
+        raw_text = data["choices"][0]["message"].get("content") or ""
+        raw_text = raw_text.strip()
+        
+        if not raw_text:
+            logger.error("Groq returned empty/whitespace-only content")
+            raise ClaimExtractionError("Groq returned empty content")
+            
+        # Clean markdown fences if any
+        if raw_text.startswith("`"):
+            lines = raw_text.splitlines()
+            if lines[0].startswith("`"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("`"):
+                lines = lines[:-1]
+            raw_text = "\n".join(lines).strip()
+            
+        parsed = json.loads(raw_text)
+
+        if not isinstance(parsed, list):
+            raise ClaimExtractionError(f"Groq expected list, got {type(parsed)}")
+
+        return parsed
+
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        logger.error(
+            "Groq fallback extraction HTTP %d: %s",
+            status,
+            exc.response.text[:300],
+        )
+        raise ClaimExtractionError(f"Groq HTTP error {status}") from exc
+    except httpx.TimeoutException as exc:
+        logger.error("Groq fallback extraction timed out.")
+        raise ClaimExtractionError("Groq timeout") from exc
+    except Exception as exc:
+        if isinstance(exc, ClaimExtractionError):
+            raise
+        logger.error("Groq fallback extraction failed: %s", exc)
+        raise ClaimExtractionError(f"Groq failed: {exc}") from exc
 
 # ---------------------------------------------------------------------------
 # Scoring helpers (pure Python, zero I/O)
@@ -438,10 +567,39 @@ async def process_video_claims(video_id: str, top_n: int = 12) -> list[Candidate
 
     # 3. Send batches sequentially (avoids parallel 429s on free tier)
     raw_claims: list[dict[str, Any]] = []
+    groq_api_key = settings.GROQ_API_KEY.get_secret_value()
+    groq_model = settings.GROQ_MODEL
+    
     for i, batch_text in enumerate(batches):
         logger.info("Sending batch %d/%d to Gemini", i + 1, len(batches))
-        results = await _call_gemini(batch_text, api_key)
-        raw_claims.extend(results)
+        try:
+            results = await _call_gemini(batch_text, api_key)
+            if results:
+                raw_claims.extend(results)
+            else:
+                logger.info("Gemini succeeded but returned no claims.")
+        except ClaimExtractionError as exc:
+            logger.warning("Gemini claim extraction failed with %s; attempting Groq fallback", exc)
+            if groq_api_key:
+                # Target max input characters based on tokens (4 chars/token approximation)
+                groq_max_chars = settings.GROQ_MAX_INPUT_TOKENS * 4
+                groq_sub_batches = _chunk_text_for_groq(batch_text, groq_max_chars)
+                logger.info("Groq fallback: splitting batch into %d sub-batches", len(groq_sub_batches))
+                
+                groq_success_count = 0
+                for j, g_batch in enumerate(groq_sub_batches):
+                    try:
+                        results = await _call_groq(g_batch, groq_api_key, groq_model)
+                        logger.info("Groq sub-batch %d succeeded: %d claims", j + 1, len(results))
+                        if results:
+                            raw_claims.extend(results)
+                            groq_success_count += len(results)
+                    except ClaimExtractionError as g_exc:
+                        logger.error("Groq fallback claim extraction failed for sub-batch %d: %s", j + 1, g_exc)
+                
+                logger.info("Groq fallback claim extraction succeeded: %d claims extracted", groq_success_count)
+            else:
+                logger.warning("GROQ_API_KEY not configured, skipping fallback.")
 
     if not raw_claims:
         logger.warning("No claims extracted for video %s", video_id)

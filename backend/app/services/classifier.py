@@ -90,6 +90,7 @@ __all__ = [
     "ClaimType",
     "ClassifierError",
     "ClassifierConfigError",
+    "ClassifierQuotaError",
     "ClassifierTimeoutError",
     "ClassifierServiceError",
     "GEMINI_CLASSIFY_URL",
@@ -103,6 +104,10 @@ __all__ = [
 
 class ClassifierError(Exception):
     """Base class for all classifier service errors."""
+
+
+class ClassifierQuotaError(ClassifierError):
+    """Raised when Gemini returns HTTP 429."""
 
 
 class ClassifierConfigError(ClassifierError):
@@ -128,7 +133,7 @@ class ClassifierServiceError(ClassifierError):
 # Exported so tests can import it for respx URL matching.
 GEMINI_CLASSIFY_URL = (
     "https://generativelanguage.googleapis.com"
-    "/v1beta/models/gemini-3.6-flash:generateContent"
+    "/v1beta/models/gemini-3.5-flash-lite:generateContent"
 )
 
 # Strict zero-shot classification prompt.
@@ -320,6 +325,8 @@ async def _classify_with_gemini(text: str) -> ClaimType:
                 # Never include the key in log messages.
                 params={"key": api_key},
             )
+            if response.status_code == 429:
+                raise ClassifierQuotaError("Gemini classification quota exceeded (HTTP 429)")
             response.raise_for_status()
             data = response.json()
 
@@ -406,6 +413,8 @@ async def classify_claim(text: str) -> ClaimType:
         logger.info("Claim classified by Gemini as %s", gemini_result.value)
         return gemini_result
 
+    except ClassifierQuotaError:
+        raise
     except ClassifierConfigError:
         logger.warning(
             "Gemini classifier: API key not configured — "

@@ -244,7 +244,7 @@ async def _gemini_first_pass(claim: str, context: str) -> FirstPassResult:
 
     if response.status_code == 429:
         logger.warning("Gemini first-pass quota exceeded")
-        return FirstPassResult(verdict="uncertain", confidence=0.0, needs_web_search=True)
+        raise LLMQuotaError("Gemini first-pass quota exceeded (HTTP 429)")
 
     if response.status_code >= 400:
         logger.error("Gemini first-pass HTTP %d", response.status_code)
@@ -327,7 +327,13 @@ async def verify_video_claim(
         ))
 
     metrics.gemini_first_pass_calls += 1
-    first_pass = await _gemini_first_pass(claim_text, context)
+    try:
+        first_pass = await _gemini_first_pass(claim_text, context)
+    except LLMQuotaError:
+        logger.warning("LLM first-pass quota exceeded - unverifiable")
+        return _cache_and_return(VideoVerifyResult(
+            verdict="unverifiable", confidence_score=0.0, sources=[], metrics=metrics,
+        ))
     logger.info(
         "Video verify: first-pass verdict=%s conf=%.2f needs_web=%s reason=%s",
         first_pass.verdict, first_pass.confidence, first_pass.needs_web_search, first_pass.reason[:80],

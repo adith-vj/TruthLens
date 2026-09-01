@@ -83,6 +83,13 @@ class Settings(BaseSettings):
     # Increased to 10.0s to accommodate implicit chain-of-thought generation.
     CLASSIFIER_TIMEOUT_SECONDS: float = 10.0
 
+    # --- Groq fallback client ---
+    # Used for video claim extraction when Gemini quota is exhausted or request fails.
+    GROQ_API_KEY: SecretStr = SecretStr("")
+    # Model for Groq fallback claim extraction. Llama-3.3-70b-versatile is excellent for structured tasks.
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    # Target max input tokens for Groq to avoid 413s on restricted tiers (e.g. openai/gpt-oss-120b limit is 8000)
+    GROQ_MAX_INPUT_TOKENS: int = 5000
 
     # --- Tavily web search client (Phase 4) ---
     # API key for the Tavily AI search API.  Obtain a free key (1,000 credits/month,

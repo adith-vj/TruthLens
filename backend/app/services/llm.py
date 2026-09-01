@@ -161,7 +161,7 @@ class LLMParseError(LLMError):
 # Separate from GEMINI_CLASSIFY_URL in classifier.py
 GEMINI_VERIFY_URL = (
     "https://generativelanguage.googleapis.com"
-    "/v1beta/models/gemini-3.6-flash:generateContent"
+    "/v1beta/models/gemini-3.5-flash-lite:generateContent"
 )
 
 # The four valid verdict values (matches VerdictType in models/verification.py).

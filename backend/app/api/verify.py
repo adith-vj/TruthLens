@@ -104,7 +104,7 @@ from fastapi import status as http_status
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.verification import SourceItem, VerifyRequest, VerifyResponse
-from app.services.classifier import ClaimType, classify_claim
+from app.services.classifier import ClaimType, classify_claim, ClassifierQuotaError
 from app.services.factcheck import (
     FactCheckAuthError,
     FactCheckConfigError,
@@ -198,7 +198,11 @@ async def verify_claim(request: VerifyRequest) -> VerifyResponse:
 
     # --- Phase 3: Classify claim type ---
     # classify_claim() never raises; all failures fall back to FACTUAL_CLAIM.
-    claim_type = await classify_claim(claim_text)
+    try:
+        claim_type = await classify_claim(claim_text)
+    except ClassifierQuotaError:
+        logger.warning("Gemini classifier quota exceeded - returning unverifiable")
+        return _unverifiable()
     logger.info("Claim type: %s (length=%d)", claim_type.value, len(claim_text))
 
     # OPINION and ADVERTISEMENT: early exit — no external calls.
