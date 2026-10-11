@@ -11,13 +11,8 @@ from PIL import Image, ImageChops, ImageEnhance
 from app.models.legacy import ArticleData, ExplainData, ImageData
 
 # Legacy ML models
-from app.services.legacy_models import (
-    fake_news_model,
-    bias_model,
-    HISTORIC_BIAS_DB,
-    deepfake_model,
-    face_model,
-)
+from app.services import legacy_models
+from app.services.legacy_models import HISTORIC_BIAS_DB
 
 # Legacy image functions
 from app.services.legacy_image import (
@@ -52,8 +47,8 @@ def analyze_text(data: ArticleData):
     domain = extract_domain(data.url)
     historic_bias = HISTORIC_BIAS_DB.get(domain, "Unknown / Not in Database")
     
-    fake_news_result = fake_news_model(truncated_text)[0]
-    tone_result = bias_model(truncated_text)[0]
+    fake_news_result = legacy_models.get_fake_news_model()(truncated_text)[0]
+    tone_result = legacy_models.get_bias_model()(truncated_text)[0]
     
     return {
         "status": "success",
@@ -71,12 +66,13 @@ def explain_bias(data: ExplainData):
     text_to_process = data.text[:2000] 
     sentences = re.split(r'(?<=[.!?]) +', text_to_process)
     flagged_sentences = []
+    bias_engine = legacy_models.get_bias_model()
 
     for sentence in sentences:
         if len(sentence) < 15:
             continue
             
-        result = bias_model(sentence)[0]
+        result = bias_engine(sentence)[0]
         if result['label'].upper() == 'BIASED' and result['score'] > 0.75:
             flagged_sentences.append(sentence)
 
@@ -161,9 +157,11 @@ def deep_scan_image(data: ImageData):
         if routing["face_detection"]:
             face_info = detect_faces_mediapipe(processed)
             if face_info["face_detected"]:
+                face_model = legacy_models.get_face_model()
                 face_results = face_model(processed)
                 face_scores  = parse_model_scores(face_results, face_model)
 
+        deepfake_model = legacy_models.get_deepfake_model()
         general_results = deepfake_model(processed)
         general_scores  = parse_model_scores(general_results, deepfake_model)
 

@@ -1,8 +1,8 @@
 import logging
 from typing import Dict, Any
 
-from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel
+import asyncio
+from fastapi import APIRouter, HTTPException, status, UploadFile, File
 
 from app.models.video import (
     VideoTranscriptRequest, 
@@ -163,4 +163,152 @@ async def get_analysis_by_video(video_id: str):
         )
         
     return job
+
+
+# ---------------------------------------------------------------------------
+# Visual Fake / Deepfake Video Analysis (No Audio / Silent Videos)
+# ---------------------------------------------------------------------------
+from app.models.visual_video import (
+    VisualFramesAnalysisRequest,
+    VisualUrlAnalysisRequest,
+    VisualVideoAnalysisResponse,
+)
+from app.services.visual_video_analysis import (
+    analyze_video_frames,
+    decode_base64_image,
+    extract_frames_from_video_bytes,
+    extract_frames_from_video_file,
+)
+
+
+@router.post("/analyze-visual-frames", response_model=VisualVideoAnalysisResponse)
+async def analyze_visual_frames_endpoint(request: VisualFramesAnalysisRequest):
+    """
+    Analyzes an array of client-extracted video frames without audio.
+    Used by browser extension canvas frame capture on any web video.
+    """
+    try:
+        frames = []
+        for item in request.frames:
+            pil_img = decode_base64_image(item.image_base64)
+            frames.append((item.timestamp, pil_img))
+
+        if not frames:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid frames provided for analysis.",
+            )
+
+        result = await asyncio.to_thread(analyze_video_frames, frames)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Visual frames analysis failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Visual video analysis failed: {str(e)}",
+        )
+
+
+@router.post("/analyze-visual-file", response_model=VisualVideoAnalysisResponse)
+async def analyze_visual_file_endpoint(
+    file: UploadFile = File(...), max_frames: int = 16
+):
+    """
+    Upload a silent or audio-free video file (.mp4, .webm, .mov, .avi)
+    for multi-signal visual deepfake detection.
+    """
+    ext = file.filename.split(".")[-1].lower() if file.filename else ""
+    if ext not in ["mp4", "webm", "mov", "avi", "mkv"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported video format. Please upload MP4, WebM, MOV, or AVI.",
+        )
+
+    try:
+        content = await file.read()
+        if len(content) > 50 * 1024 * 1024:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Video file exceeds maximum size limit (50MB).",
+            )
+
+        def _process():
+            extracted, dur = extract_frames_from_video_bytes(
+                content, max_frames=max_frames
+            )
+            return analyze_video_frames(extracted, total_duration=dur)
+
+        result = await asyncio.to_thread(_process)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Visual video file analysis failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Video processing failed: {str(e)}",
+        )
+
+
+@router.post("/analyze-visual-url", response_model=VisualVideoAnalysisResponse)
+async def analyze_visual_url_endpoint(request: VisualUrlAnalysisRequest):
+    """
+    Analyzes a video from URL (direct stream or YouTube URL via yt-dlp snippet).
+    """
+    url = request.video_url.strip()
+    max_frames = request.max_frames or 16
+
+    try:
+        def _process():
+            # If YouTube URL, fetch short snippet via yt-dlp
+            if "youtube.com" in url or "youtu.be" in url:
+                import tempfile
+                import os
+                import yt_dlp
+
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    out_template = os.path.join(tmp_dir, "snippet.%(ext)s")
+                    ydl_opts = {
+                        "format": "bestvideo[height<=480]/worstvideo/worst/best",
+                        "outtmpl": out_template,
+                        "quiet": True,
+                        "no_warnings": True,
+                    }
+                    try:
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            ydl.download([url])
+                    except Exception as yt_err:
+                        logger.warning("yt-dlp primary download failed, retrying generic: %s", yt_err)
+                        ydl_opts_fallback = {
+                            "format": "worst/best",
+                            "outtmpl": out_template,
+                            "quiet": True,
+                            "no_warnings": True,
+                        }
+                        with yt_dlp.YoutubeDL(ydl_opts_fallback) as ydl:
+                            ydl.download([url])
+
+                    # Find downloaded file
+                    files = [os.path.join(tmp_dir, f) for f in os.listdir(tmp_dir) if os.path.isfile(os.path.join(tmp_dir, f))]
+                    if not files:
+                        raise ValueError("yt-dlp could not download video from URL.")
+
+                    video_file = files[0]
+                    extracted, dur = extract_frames_from_video_file(video_file, max_frames=max_frames)
+                    return analyze_video_frames(extracted, total_duration=dur)
+            else:
+                extracted, dur = extract_frames_from_video_file(url, max_frames=max_frames)
+                return analyze_video_frames(extracted, total_duration=dur)
+
+        result = await asyncio.to_thread(_process)
+        return result
+    except Exception as e:
+        logger.error("Visual URL analysis failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to analyze video from URL: {str(e)}",
+        )
+
 

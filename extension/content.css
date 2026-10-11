@@ -74,13 +74,13 @@
     right: 24px;
     background: #0f172a;
     color: #f8fafc;
-    padding: 14px 20px;
+    padding: 12px 18px;
     border-radius: 8px;
-    box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+    box-shadow: 0 10px 25px rgba(0,0,0,0.4);
     font-family: 'Segoe UI', Tahoma, sans-serif;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 500;
-    z-index: 999999;
+    z-index: 9999999;
     display: flex;
     align-items: center;
     gap: 12px;
@@ -89,11 +89,14 @@
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     pointer-events: none;
     border-left: 4px solid #3b82f6;
+    cursor: pointer;
+    user-select: none;
 }
 
 #truthlens-toast.tl-visible {
     opacity: 1;
     transform: translateY(0);
+    pointer-events: auto;
 }
 
 .truthlens-spinner {

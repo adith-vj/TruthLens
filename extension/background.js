@@ -11,6 +11,12 @@ chrome.runtime.onInstalled.addListener(() => {
     title: "🔍 Verify Claim with TruthLens",
     contexts: ["selection"]
   });
+
+  chrome.contextMenus.create({
+    id: "verify-video-truthlens",
+    title: "🔍 Scan Video for Deepfakes (TruthLens)",
+    contexts: ["video", "link"]
+  });
 });
 
 const activeVerifications = new Set();
@@ -52,6 +58,135 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       });
       setTimeout(() => chrome.tabs.sendMessage(tab.id, { action: "hideLoader" }), 3000);
     }
+  }
+
+  // VIDEO FORENSICS FLOW (NO AUDIO / VISUAL DEEPFAKE SCAN)
+  if (info.menuItemId === "verify-video-truthlens") {
+    const videoSrc = info.srcUrl || info.linkUrl;
+    console.log("TruthLens: Target video acquired ->", videoSrc);
+
+    // If clicked on a video link (e.g. YouTube thumbnail), directly send to /api/video/analyze-visual-url
+    if (info.linkUrl && (info.linkUrl.includes("youtube.com") || info.linkUrl.includes("youtu.be"))) {
+        chrome.tabs.sendMessage(tab.id, { 
+            action: "showLoader", 
+            message: "Fetching YouTube video frames via yt-dlp..." 
+        });
+
+        fetch("http://127.0.0.1:8000/api/video/analyze-visual-url", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ video_url: info.linkUrl, max_frames: 12 })
+        }).then(async res => {
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || "Server error");
+            }
+            return res.json();
+        }).then(data => {
+            chrome.tabs.sendMessage(tab.id, { action: "hideLoader" });
+            chrome.tabs.sendMessage(tab.id, {
+                action: "showVideoAnalysis",
+                analysis: data,
+                videoTitle: tab.title || "YouTube Video"
+            });
+        }).catch(err => {
+            console.error("Link video scan error:", err);
+            chrome.tabs.sendMessage(tab.id, {
+                action: "showLoader",
+                message: `Error: ${err.message || "Failed to analyze video."}`,
+                autoDismissMs: 3500
+            });
+            setTimeout(() => {
+                chrome.tabs.sendMessage(tab.id, { action: "hideLoader" }, () => {
+                    if (chrome.runtime.lastError) {}
+                });
+            }, 3500);
+        });
+        return;
+    }
+
+    chrome.tabs.sendMessage(tab.id, { 
+        action: "showLoader", 
+        message: "Extracting video frames for deepfake scan..." 
+    });
+
+    chrome.tabs.sendMessage(tab.id, { action: "captureVideoFrames", maxFrames: 12 }, async (resp) => {
+        if (resp && resp.status === "success" && resp.frames && resp.frames.length > 0) {
+            try {
+                const apiRes = await fetch("http://127.0.0.1:8000/api/video/analyze-visual-frames", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        video_id: "context_menu_video",
+                        title: tab.title || "Web Video",
+                        frames: resp.frames
+                    })
+                });
+
+                if (!apiRes.ok) throw new Error("Backend visual scan failed");
+                const data = await apiRes.json();
+
+                chrome.tabs.sendMessage(tab.id, { action: "hideLoader" });
+                chrome.tabs.sendMessage(tab.id, {
+                    action: "showVideoAnalysis",
+                    analysis: data,
+                    videoTitle: tab.title || "Video"
+                });
+            } catch (err) {
+                console.error("Video scan error:", err);
+                chrome.tabs.sendMessage(tab.id, {
+                    action: "showLoader",
+                    message: "Error: Failed to analyze video frames.",
+                    autoDismissMs: 3000
+                });
+                setTimeout(() => {
+                    chrome.tabs.sendMessage(tab.id, { action: "hideLoader" }, () => {
+                        if (chrome.runtime.lastError) {}
+                    });
+                }, 3000);
+            }
+        } else if (videoSrc) {
+            try {
+                const apiRes = await fetch("http://127.0.0.1:8000/api/video/analyze-visual-url", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ video_url: videoSrc, max_frames: 12 })
+                });
+
+                if (!apiRes.ok) throw new Error("Stream scan failed");
+                const data = await apiRes.json();
+
+                chrome.tabs.sendMessage(tab.id, { action: "hideLoader" });
+                chrome.tabs.sendMessage(tab.id, {
+                    action: "showVideoAnalysis",
+                    analysis: data,
+                    videoTitle: tab.title || "Video"
+                });
+            } catch (err) {
+                chrome.tabs.sendMessage(tab.id, {
+                    action: "showLoader",
+                    message: "Error: Could not process video stream.",
+                    autoDismissMs: 3000
+                });
+                setTimeout(() => {
+                    chrome.tabs.sendMessage(tab.id, { action: "hideLoader" }, () => {
+                        if (chrome.runtime.lastError) {}
+                    });
+                }, 3000);
+            }
+        } else {
+            chrome.tabs.sendMessage(tab.id, {
+                action: "showLoader",
+                message: "Could not capture video frames.",
+                autoDismissMs: 3000
+            });
+            setTimeout(() => {
+                chrome.tabs.sendMessage(tab.id, { action: "hideLoader" }, () => {
+                    if (chrome.runtime.lastError) {}
+                });
+            }, 3000);
+        }
+    });
   }
 
   // TEXT CLAIM VERIFICATION FLOW

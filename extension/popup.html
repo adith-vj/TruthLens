@@ -11,6 +11,7 @@
         <!-- HEADER -->
         <header class="tl-header">
             <h1 class="tl-title">TruthLens</h1>
+            <button id="header-close-btn" title="Close" style="background: none; border: none; font-size: 18px; color: var(--text-muted); cursor: pointer; padding: 0 4px; line-height: 1;">&times;</button>
         </header>
 
         <!-- STATE: EMPTY / IDLE -->
@@ -25,6 +26,12 @@
                 </svg>
             </div>
             <p class="tl-idle-text">Select text on any webpage to verify claims.</p>
+            <div style="margin-top: 10px; border-top: 1px solid var(--border-color); padding-top: 10px;">
+                <label for="local-video-file" class="tl-secondary-btn" style="cursor: pointer; display: block; text-align: center; font-size: 11px;">
+                    📁 Scan Video File for Deepfakes
+                </label>
+                <input type="file" id="local-video-file" accept="video/mp4,video/webm,video/mov,video/avi" style="display: none;">
+            </div>
         </div>
 
         <!-- STATE: VIDEO DETECTED (TRANSCRIPT AVAILABLE) -->
@@ -41,12 +48,13 @@
                     <line x1="17" y1="7" x2="22" y2="7"></line>
                 </svg>
             </div>
-            <p class="tl-idle-text" style="margin-bottom: 8px;">Video detected on this page.</p>
-            <p id="video-transcript-info" style="font-size: 11px; color: #94a3b8; margin-bottom: 16px;">Transcript capability available.</p>
-            <button id="analyze-video-btn" class="tl-primary-btn">Analyze this video</button>
+            <p class="tl-idle-text" style="margin-bottom: 6px;">Video detected on this page.</p>
+            <p id="video-transcript-info" style="font-size: 11px; color: #94a3b8; margin-bottom: 12px;">Transcript capability available.</p>
+            <button id="analyze-video-btn" class="tl-primary-btn" style="margin-bottom: 8px;">Fact-Check Spoken Claims</button>
+            <button id="analyze-visual-ready-btn" class="tl-secondary-btn" style="font-size: 12px;">🔍 Scan Visuals for Deepfakes</button>
         </div>
 
-        <!-- STATE: VIDEO DETECTED (NO TRANSCRIPT) -->
+        <!-- STATE: VIDEO DETECTED (NO TRANSCRIPT / SILENT VIDEO) -->
         <div id="state-video-no-transcript" class="tl-state hidden">
             <div class="tl-idle-icon">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -60,8 +68,14 @@
                     <line x1="17" y1="7" x2="22" y2="7"></line>
                 </svg>
             </div>
-            <p class="tl-idle-text" style="margin-bottom: 8px;">Video detected</p>
-            <p style="font-size: 12px; color: #94a3b8; background: rgba(255,255,255,0.05); padding: 8px; border-radius: 4px;">No accessible transcript found.</p>
+            <p class="tl-idle-text" style="margin-bottom: 6px;" id="no-transcript-title">Silent or Audio-Free Video</p>
+            <p style="font-size: 11px; color: #94a3b8; background: rgba(0,0,0,0.04); border: 1px solid var(--border-color); padding: 8px 10px; border-radius: 4px; margin-bottom: 6px; line-height: 1.4;" id="no-transcript-reason">
+                No spoken audio or transcript found in this video.
+            </p>
+            <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.4;">
+                TruthLens can analyze the video frames directly for AI deepfakes, face manipulation, and synthetic scene artifacts.
+            </p>
+            <button id="analyze-visual-btn" class="tl-primary-btn">🔍 Scan Video for Deepfakes</button>
         </div>
 
         <!-- STATE: ANALYZING VIDEO -->
@@ -69,8 +83,8 @@
             <div class="tl-spinner-container">
                 <div class="tl-spinner"></div>
             </div>
-            <p class="tl-loading-text">Retrieving transcript...</p>
-            <p class="tl-loading-text" style="font-size: 12px; opacity: 0.7;">Processing transcript...</p>
+            <p id="analyzing-video-title" class="tl-loading-text">Analyzing video...</p>
+            <p id="analyzing-video-subtitle" class="tl-loading-text" style="font-size: 12px; opacity: 0.7;">Extracting visual frames...</p>
         </div>
 
         <!-- STATE: TRANSCRIPT READY -->
@@ -116,6 +130,59 @@
             <p class="tl-loading-text">Analyzing claim and checking sources...</p>
         </div>
 
+        <!-- STATE: VISUAL DEEPFAKE RESULT -->
+        <div id="state-visual-result" class="tl-state hidden" style="text-align: left;">
+            <div class="tl-result-header">
+                <div class="tl-verdict-badge" id="visual-verdict-badge">AUTHENTIC</div>
+                <div class="tl-confidence" id="visual-confidence-score">92% confidence</div>
+            </div>
+
+            <div id="visual-flagged-banner" class="hidden" style="background: rgba(239, 68, 68, 0.12); border-left: 3px solid #ef4444; color: #ef4444; margin-bottom: 10px; padding: 8px 10px; font-size: 11px; border-radius: 4px; font-weight: 500;">
+                <span>⚠️ Anomalous segments: </span><span id="visual-flagged-times" style="font-weight: bold;">0:04 - 0:08</span>
+            </div>
+
+            <div class="tl-section-label" style="margin-bottom: 6px;">Forensic Risk Breakdown</div>
+            <div id="visual-breakdown-container" style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px;">
+                <div style="background: var(--bg-secondary); border: 1px solid var(--border-color); padding: 6px 8px; border-radius: 4px; font-size: 11px;">
+                    <div style="color: var(--text-secondary); font-size: 10px;">Face Deepfake</div>
+                    <div id="risk-face" style="font-weight: bold; margin-top: 2px;">0%</div>
+                </div>
+                <div style="background: var(--bg-secondary); border: 1px solid var(--border-color); padding: 6px 8px; border-radius: 4px; font-size: 11px;">
+                    <div style="color: var(--text-secondary); font-size: 10px;">Mask Seam Blending</div>
+                    <div id="risk-seam" style="font-weight: bold; margin-top: 2px;">0%</div>
+                </div>
+                <div style="background: var(--bg-secondary); border: 1px solid var(--border-color); padding: 6px 8px; border-radius: 4px; font-size: 11px;">
+                    <div style="color: var(--text-secondary); font-size: 10px;">Scene AI Pattern</div>
+                    <div id="risk-scene" style="font-weight: bold; margin-top: 2px;">0%</div>
+                </div>
+                <div style="background: var(--bg-secondary); border: 1px solid var(--border-color); padding: 6px 8px; border-radius: 4px; font-size: 11px;">
+                    <div style="color: var(--text-secondary); font-size: 10px;">Frequency (FFT)</div>
+                    <div id="risk-fft" style="font-weight: bold; margin-top: 2px;">0%</div>
+                </div>
+                <div style="background: var(--bg-secondary); border: 1px solid var(--border-color); padding: 6px 8px; border-radius: 4px; font-size: 11px; grid-column: span 2;">
+                    <div style="color: var(--text-secondary); font-size: 10px;">Temporal Jitter</div>
+                    <div id="risk-temporal" style="font-weight: bold; margin-top: 2px;">0%</div>
+                </div>
+            </div>
+
+            <div class="tl-section-label" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <span>Frame Timeline</span>
+                <span id="visual-frame-count" style="font-size: 10px; color: var(--text-muted); font-weight: normal;">0 frames</span>
+            </div>
+            <div id="visual-timeline-list" style="max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; padding-right: 2px;">
+                <!-- Frame timeline items injected here -->
+            </div>
+
+            <div id="visual-explanation" style="font-size: 11px; color: var(--text-secondary); background: var(--bg-secondary); border: 1px solid var(--border-color); padding: 8px 10px; border-radius: 4px; margin-bottom: 12px; line-height: 1.45;">
+                <!-- Explanation text -->
+            </div>
+
+            <div style="display: flex; gap: 8px;">
+                <button id="visual-back-btn" class="tl-secondary-btn" style="flex: 1;">← Scan Another</button>
+                <button id="visual-reset-btn" class="tl-primary-btn" style="flex: 1;">Close</button>
+            </div>
+        </div>
+
         <!-- STATE: RESULT -->
         <div id="state-result" class="tl-state hidden">
             <div class="tl-result-header" id="result-header">
@@ -136,7 +203,10 @@
                 Available evidence was insufficient to verify this claim or it may be an opinion/advertisement.
             </div>
 
-            <button id="reset-btn" class="tl-secondary-btn">Close</button>
+            <div style="display: flex; gap: 8px;">
+                <button id="claim-back-btn" class="tl-secondary-btn" style="flex: 1;">← Verify Another</button>
+                <button id="reset-btn" class="tl-primary-btn" style="flex: 1;">Close</button>
+            </div>
         </div>
 
         <!-- STATE: ERROR -->

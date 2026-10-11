@@ -6,11 +6,7 @@ from io import BytesIO
 from PIL import Image, ExifTags, ImageChops, ImageEnhance
 import mediapipe as mp
 
-from app.services.legacy_models import (
-    deepfake_model,
-    face_model,
-    face_detector,
-)
+from app.services import legacy_models
 
 logger = logging.getLogger(__name__)
 
@@ -140,12 +136,13 @@ def get_analysis_routing(image_type):
 
 def detect_faces_mediapipe(image):
     _NO_FACE = {"face_detected": False, "face_count": 0, "best_confidence": 0.0}
-    if face_detector is None:
+    detector = legacy_models.get_face_detector()
+    if detector is None:
         return _NO_FACE
     try:
         rgb = np.array(image, dtype=np.uint8)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = face_detector.detect(mp_image)
+        result = detector.detect(mp_image)
         if result.detections:
             best = max(
                 d.categories[0].score for d in result.detections
@@ -163,6 +160,11 @@ def detect_faces_mediapipe(image):
 def compute_ela_metrics(image):
     try:
         original_img = preprocess_image(image)
+        # Downsample for fast compression computation without sacrificing statistical error profile
+        w, h = original_img.size
+        if max(w, h) > 256:
+            scale = 256.0 / max(w, h)
+            original_img = original_img.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
         np_original = np.array(original_img, dtype=np.float32)
 
         quality_levels = [75, 85, 95]
@@ -210,6 +212,10 @@ def compute_ela_metrics(image):
 def compute_fft_metrics(image):
     try:
         gray = image.convert("L")
+        w, h = gray.size
+        if max(w, h) > 256:
+            scale = 256.0 / max(w, h)
+            gray = gray.resize((int(w * scale), int(h * scale)), Image.BILINEAR)
         img_array = np.array(gray, dtype=np.float32)
         rows, cols = img_array.shape
 

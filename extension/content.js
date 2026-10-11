@@ -1,20 +1,83 @@
 
-function showTruthLensToast(message) {
+let toastTimeout = null;
+
+function showTruthLensToast(message, autoDismissMs = null) {
     let toast = document.getElementById('truthlens-toast');
     if (!toast) {
         toast = document.createElement('div');
         toast.id = 'truthlens-toast';
         document.body.appendChild(toast);
     }
-    toast.innerHTML = `<div class="truthlens-spinner"></div> <span>${message}</span>`;
-    // Tiny delay ensures the CSS transition triggers
-    setTimeout(() => toast.classList.add('tl-visible'), 10); 
+
+    if (toastTimeout) {
+        clearTimeout(toastTimeout);
+        toastTimeout = null;
+    }
+
+    const isResult = message.includes("scan:") || message.includes("DEEPFAKE") || message.includes("AUTHENTIC") || message.includes("SUSPICIOUS");
+    const isError = message.toLowerCase().includes("error");
+
+    let iconHtml = '<div class="truthlens-spinner"></div>';
+    let borderColor = '#3b82f6';
+
+    if (isResult) {
+        if (message.includes("DEEPFAKE")) {
+            iconHtml = '<span style="color: #ef4444; font-size: 16px; font-weight: bold; line-height: 1;">✕</span>';
+            borderColor = '#ef4444';
+        } else if (message.includes("AUTHENTIC")) {
+            iconHtml = '<span style="color: #10b981; font-size: 16px; font-weight: bold; line-height: 1;">✓</span>';
+            borderColor = '#10b981';
+        } else {
+            iconHtml = '<span style="color: #f59e0b; font-size: 16px; font-weight: bold; line-height: 1;">⚠</span>';
+            borderColor = '#f59e0b';
+        }
+    } else if (isError) {
+        iconHtml = '<span style="color: #ef4444; font-size: 16px; font-weight: bold; line-height: 1;">!</span>';
+        borderColor = '#ef4444';
+    }
+
+    toast.style.borderLeftColor = borderColor;
+    toast.title = "Click to dismiss";
+    toast.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 10px; width: 100%; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                ${iconHtml}
+                <span>${message}</span>
+            </div>
+            <span id="tl-toast-close" title="Dismiss" style="cursor: pointer; font-size: 18px; opacity: 0.7; padding: 0 4px; line-height: 1; margin-left: 10px;">&times;</span>
+        </div>
+    `;
+
+    toast.onclick = () => {
+        hideTruthLensToast();
+    };
+
+    setTimeout(() => {
+        if (toast) toast.classList.add('tl-visible');
+    }, 10);
+
+    const timeoutDuration = autoDismissMs || (isResult || isError ? 4000 : null);
+    if (timeoutDuration) {
+        toastTimeout = setTimeout(() => {
+            hideTruthLensToast();
+        }, timeoutDuration);
+    }
 }
 
 function hideTruthLensToast() {
+    if (toastTimeout) {
+        clearTimeout(toastTimeout);
+        toastTimeout = null;
+    }
     const toast = document.getElementById('truthlens-toast');
     if (toast) {
         toast.classList.remove('tl-visible');
+        setTimeout(() => {
+            const el = document.getElementById('truthlens-toast');
+            if (el && !el.classList.contains('tl-visible')) {
+                el.remove();
+            }
+        }, 350);
     }
 }
 
@@ -63,9 +126,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({status: "scanning"});
     }
 
-    // --- NEW: INTERMEDIATE LOADING STATE FOR IMAGES ---
+    // --- INTERMEDIATE LOADING STATE FOR IMAGES & VIDEOS ---
     else if (request.action === "showLoader") {
-        showTruthLensToast(request.message);
+        const isCompletion = request.message && (request.message.includes("scan:") || request.message.includes("complete") || request.message.includes("Error"));
+        showTruthLensToast(request.message, request.autoDismissMs || (isCompletion ? 4000 : null));
+    }
+
+    else if (request.action === "hideLoader") {
+        hideTruthLensToast();
     }
 
     // --- IMAGE MODAL UI INJECTION ---
@@ -236,6 +304,200 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
     }
 
+    // --- VIDEO FORENSIC VERIFICATION UI MODAL INJECTION ---
+    else if (request.action === "showVideoAnalysis") {
+        console.log("TruthLens: Injecting Video Forensics Result Modal", request.analysis);
+        
+        hideTruthLensToast();
+
+        const existingModal = document.getElementById('truthlens-video-modal');
+        if (existingModal) existingModal.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'truthlens-video-modal';
+        overlay.className = 'truthlens-overlay';
+
+        const data = request.analysis;
+        const videoTitle = request.videoTitle || "Video Forensics Scan";
+
+        // Colors mapping
+        let verdictColor, verdictBg, verdictBorder, verdictText;
+        if (data.verdict === 'DEEPFAKE') {
+            verdictColor = '#ef4444';
+            verdictBg = 'rgba(239, 68, 68, 0.15)';
+            verdictBorder = 'rgba(239, 68, 68, 0.4)';
+            verdictText = 'DEEPFAKE';
+        } else if (data.verdict === 'SUSPICIOUS') {
+            verdictColor = '#f59e0b';
+            verdictBg = 'rgba(245, 158, 11, 0.15)';
+            verdictBorder = 'rgba(245, 158, 11, 0.4)';
+            verdictText = 'SUSPICIOUS';
+        } else {
+            verdictColor = '#10b981';
+            verdictBg = 'rgba(16, 185, 129, 0.15)';
+            verdictBorder = 'rgba(16, 185, 129, 0.4)';
+            verdictText = 'AUTHENTIC';
+        }
+
+        const confidenceStr = `${Math.round(data.confidence_score * 100)}% Confidence`;
+
+        // Flagged segments banner
+        let flaggedBannerHtml = '';
+        if (data.flagged_segments && data.flagged_segments.length > 0) {
+            flaggedBannerHtml = `
+                <div style="background: rgba(239, 68, 68, 0.15); border-left: 3px solid #ef4444; color: #ef4444; margin-bottom: 14px; padding: 10px 12px; font-size: 13px; border-radius: 6px; font-weight: 500;">
+                    ⚠️ <strong>Anomalous segments detected:</strong> ${data.flagged_segments.join(', ')}
+                </div>
+            `;
+        }
+
+        // Forensic risk breakdown
+        const fb = data.forensic_breakdown || {};
+        const getRiskColor = (val) => {
+            if (val >= 0.55) return '#ef4444';
+            if (val >= 0.35) return '#f59e0b';
+            return '#10b981';
+        };
+
+        const breakdownHtml = `
+            <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #94a3b8; letter-spacing: 0.05em; margin-bottom: 8px;">
+                Forensic Risk Breakdown
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 16px;">
+                <div style="background: #0f172a; border: 1px solid #334155; padding: 9px 6px; border-radius: 6px; text-align: center;">
+                    <div style="font-size: 10px; color: #94a3b8; margin-bottom: 4px;">Face Deepfake</div>
+                    <div style="font-size: 15px; font-weight: 700; color: ${getRiskColor(fb.face_deepfake_risk || 0)};">
+                        ${Math.round((fb.face_deepfake_risk || 0) * 100)}%
+                    </div>
+                </div>
+                <div style="background: #0f172a; border: 1px solid #334155; padding: 9px 6px; border-radius: 6px; text-align: center;">
+                    <div style="font-size: 10px; color: #94a3b8; margin-bottom: 4px;">Mask Seam</div>
+                    <div style="font-size: 15px; font-weight: 700; color: ${getRiskColor(fb.boundary_seam_risk || 0)};">
+                        ${Math.round((fb.boundary_seam_risk || 0) * 100)}%
+                    </div>
+                </div>
+                <div style="background: #0f172a; border: 1px solid #334155; padding: 9px 6px; border-radius: 6px; text-align: center;">
+                    <div style="font-size: 10px; color: #94a3b8; margin-bottom: 4px;">Scene AI</div>
+                    <div style="font-size: 15px; font-weight: 700; color: ${getRiskColor(fb.scene_ai_generation_risk || 0)};">
+                        ${Math.round((fb.scene_ai_generation_risk || 0) * 100)}%
+                    </div>
+                </div>
+                <div style="background: #0f172a; border: 1px solid #334155; padding: 9px 6px; border-radius: 6px; text-align: center;">
+                    <div style="font-size: 10px; color: #94a3b8; margin-bottom: 4px;">Frequency</div>
+                    <div style="font-size: 15px; font-weight: 700; color: ${getRiskColor(fb.frequency_artifacts_risk || 0)};">
+                        ${Math.round((fb.frequency_artifacts_risk || 0) * 100)}%
+                    </div>
+                </div>
+                <div style="background: #0f172a; border: 1px solid #334155; padding: 9px 6px; border-radius: 6px; text-align: center;">
+                    <div style="font-size: 10px; color: #94a3b8; margin-bottom: 4px;">Temporal</div>
+                    <div style="font-size: 15px; font-weight: 700; color: ${getRiskColor(fb.temporal_inconsistency_risk || 0)};">
+                        ${Math.round((fb.temporal_inconsistency_risk || 0) * 100)}%
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Timeline items
+        let timelineItemsHtml = '';
+        if (data.timeline && data.timeline.length > 0) {
+            timelineItemsHtml = data.timeline.map(item => {
+                const itemStatusColor = item.flagged ? '#ef4444' : '#10b981';
+                const itemStatusLabel = item.flagged ? 'FLAGGED' : 'NORMAL';
+                const itemBg = item.flagged ? 'rgba(239, 68, 68, 0.08)' : '#0f172a';
+                const itemBorder = item.flagged ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid #334155';
+                const faceText = item.face_detected ? `Face detected (${item.face_count})` : 'Full scene';
+                const primarySignal = (item.signals && item.signals.length > 0) ? item.signals[0].replace(/_/g, ' ') : 'natural';
+
+                return `
+                    <div style="padding: 8px 10px; background: ${itemBg}; border: ${itemBorder}; border-radius: 6px; font-size: 12px; display: flex; justify-content: space-between; align-items: center;">
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <span style="font-family: monospace; font-weight: 600; color: #f8fafc;">⏱ ${item.formatted_time}</span>
+                            <span style="color: #94a3b8; font-size: 11px;">${faceText} • ${primarySignal}</span>
+                        </div>
+                        <span style="color: ${itemStatusColor}; font-weight: 700; font-size: 11px;">
+                            ${itemStatusLabel} (${Math.round(item.fake_score * 100)}%)
+                        </span>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        const timelineSectionHtml = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #94a3b8; letter-spacing: 0.05em;">Frame Timeline</span>
+                <span style="font-size: 11px; color: #64748b;">${data.analyzed_frames_count || 0} frames sampled</span>
+            </div>
+            <div style="max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; padding-right: 4px;">
+                ${timelineItemsHtml}
+            </div>
+        `;
+
+        const explanationHtml = `
+            <div style="font-size: 12px; color: #cbd5e1; background: #0f172a; border: 1px solid #334155; padding: 10px 12px; border-radius: 6px; line-height: 1.5; margin-bottom: 16px;">
+                <strong>Conclusion:</strong> ${data.explanation || "Analysis complete."}
+            </div>
+        `;
+
+        overlay.innerHTML = `
+            <div class="truthlens-modal" style="max-width: 640px; width: 92%; padding: 22px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+                <button class="truthlens-close-btn" id="tl-video-close-btn" style="top: 18px; right: 20px;">&times;</button>
+                
+                <div class="truthlens-modal-header" style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px; padding-bottom: 12px;">
+                    <span style="font-size: 18px;">🎬</span>
+                    <div style="overflow: hidden;">
+                        <div style="font-size: 16px; font-weight: 700; color: #f8fafc;">TruthLens Video Forensics</div>
+                        <div style="font-size: 11px; color: #94a3b8; font-weight: normal; max-width: 480px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${videoTitle}</div>
+                    </div>
+                </div>
+
+                <div style="display: flex; justify-content: space-between; align-items: center; background: #0f172a; border: 1px solid #334155; padding: 12px 14px; border-radius: 8px; margin-bottom: 14px;">
+                    <span style="background: ${verdictBg}; color: ${verdictColor}; border: 1px solid ${verdictBorder}; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 800; letter-spacing: 0.05em;">
+                        ${verdictText}
+                    </span>
+                    <div style="text-align: right;">
+                        <div style="font-size: 14px; font-weight: 700; color: #f8fafc;">${confidenceStr}</div>
+                        <div style="font-size: 11px; color: #94a3b8;">Composite Fake Score: ${Math.round((data.composite_score || 0) * 100)}%</div>
+                    </div>
+                </div>
+
+                ${flaggedBannerHtml}
+                ${breakdownHtml}
+                ${timelineSectionHtml}
+                ${explanationHtml}
+
+                <div style="display: flex; justify-content: flex-end;">
+                    <button id="tl-video-dismiss-btn" style="background: #3b82f6; color: white; border: none; padding: 8px 18px; border-radius: 6px; font-weight: 600; font-size: 13px; cursor: pointer; transition: 0.2s;">
+                        Done
+                    </button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        const closeModal = () => {
+            overlay.remove();
+        };
+
+        const closeBtn = document.getElementById('tl-video-close-btn');
+        if (closeBtn) closeBtn.onclick = closeModal;
+
+        const dismissBtn = document.getElementById('tl-video-dismiss-btn');
+        if (dismissBtn) dismissBtn.onclick = closeModal;
+
+        overlay.onclick = (e) => {
+            if (e.target === overlay) closeModal();
+        };
+
+        const onEsc = (e) => {
+            if (e.key === 'Escape') {
+                closeModal();
+                document.removeEventListener('keydown', onEsc);
+            }
+        };
+        document.addEventListener('keydown', onEsc);
+    }
+
     // --- VIDEO CAPABILITY DETECTOR ---
     else if (request.action === "getVideoCapability") {
         sendResponse(tlVideoDetector.getCapability());
@@ -250,6 +512,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({ status: "error", message: err.message });
         });
         return true; // Keep message channel open for async response
+    }
+
+    // --- VISUAL FRAME CAPTURE FOR DEEPFAKE / SILENT VIDEO ANALYSIS ---
+    else if (request.action === "captureVideoFrames") {
+        captureFramesFromPageVideo(request.maxFrames || 12).then(frames => {
+            sendResponse({ status: "success", frames: frames });
+        }).catch(err => {
+            console.error("TruthLens Frame Capture Error:", err);
+            sendResponse({ status: "error", message: err.message });
+        });
+        return true;
     }
 
     return true; 
@@ -305,8 +578,28 @@ class VideoCapabilityDetector {
     }
 
     detectYouTubeCapability() {
-        if (!window.location.pathname.startsWith('/watch')) {
-            return { videoDetected: false }; 
+        const pathname = window.location.pathname;
+        const isWatch = pathname.startsWith('/watch');
+        const isShorts = pathname.startsWith('/shorts/');
+
+        if (!isWatch && !isShorts) {
+            return { videoDetected: false };
+        }
+
+        // For Shorts: no transcript available, but visual scan is possible
+        if (isShorts) {
+            const shortsId = pathname.split('/shorts/')[1]?.split('?')[0] || null;
+            return {
+                videoDetected: true,
+                platform: 'youtube',
+                isShorts: true,
+                videoId: shortsId,
+                transcript: {
+                    status: 'unsupported',
+                    source: 'none',
+                    isAutoGenerated: false
+                }
+            };
         }
 
         let status = 'unavailable';
@@ -347,6 +640,7 @@ class VideoCapabilityDetector {
         return {
             videoDetected: true,
             platform: 'youtube',
+            isShorts: false,
             videoId: new URLSearchParams(window.location.search).get('v'),
             transcript: {
                 status,
@@ -474,4 +768,84 @@ async function analyzeAndHighlight(targetElement) {
     } catch (error) {
         console.error("TruthLens Error:", error);
     }
+}
+
+// --- PHASE 5.6 VISUAL FRAME CAPTURE ---
+async function captureFramesFromPageVideo(maxFrames = 12) {
+    const video = document.querySelector('video');
+    if (!video) {
+        throw new Error("No HTML5 video element found on this page.");
+    }
+
+    if (video.readyState < 1) {
+        await new Promise(r => {
+            video.addEventListener('loadedmetadata', r, { once: true });
+            setTimeout(r, 800);
+        });
+    }
+
+    const duration = (video.duration && !isNaN(video.duration) && video.duration > 0) ? video.duration : 10;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    const maxDim = 640;
+    let width = video.videoWidth || 640;
+    let height = video.videoHeight || 360;
+    if (Math.max(width, height) > maxDim) {
+        const scale = maxDim / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+    }
+    canvas.width = width;
+    canvas.height = height;
+
+    const frames = [];
+    const originalTime = video.currentTime;
+    const wasPlaying = !video.paused;
+
+    try {
+        if (wasPlaying) {
+            video.pause();
+        }
+
+        const sampleCount = Math.min(maxFrames, Math.max(4, Math.floor(duration / 2)));
+        const step = duration / (sampleCount + 1);
+
+        for (let i = 1; i <= sampleCount; i++) {
+            const targetTime = Math.min(duration - 0.1, i * step);
+            video.currentTime = targetTime;
+
+            await new Promise(resolve => {
+                const onSeeked = () => {
+                    video.removeEventListener('seeked', onSeeked);
+                    resolve();
+                };
+                video.addEventListener('seeked', onSeeked);
+                setTimeout(onSeeked, 250);
+            });
+
+            try {
+                ctx.drawImage(video, 0, 0, width, height);
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+                frames.push({
+                    timestamp: Math.round(targetTime * 10) / 10,
+                    image_base64: dataUrl
+                });
+            } catch (secErr) {
+                console.warn("Canvas capture security warning:", secErr);
+                throw new Error("Cannot capture protected video frames due to browser DRM/CORS restrictions. Try scanning the video file directly.");
+            }
+        }
+    } finally {
+        video.currentTime = originalTime;
+        if (wasPlaying) {
+            video.play().catch(() => {});
+        }
+    }
+
+    if (frames.length === 0) {
+        throw new Error("Could not extract frames from this video.");
+    }
+
+    return frames;
 }
